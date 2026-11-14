@@ -5,6 +5,7 @@ import type { NavigationItem } from "@rawmat/shared"
 import type { z } from "zod"
 import { rejection, request, unavailable } from "./api"
 import { Accounts, Branches } from "./management"
+import { Materials, References } from "./catalogue"
 import { Turnstile } from "./turnstile"
 
 type Session = z.infer<typeof sessionViewSchema>
@@ -181,8 +182,10 @@ function Account() {
 
 const navigation: Record<NavigationItem, { path: string; title: string }> = {
   account: { path: "/", title: "حسابي" },
+  materials: { path: "/materials", title: "المواد الأولية" },
   accounts: { path: "/accounts", title: "الحسابات" },
   branches: { path: "/branches", title: "الشعب" },
+  references: { path: "/references", title: "القوائم المرجعية" },
 }
 
 function Workspace({ onLogout, busy, error }: { onLogout: () => void; busy: boolean; error: string }) {
@@ -221,6 +224,8 @@ function Workspace({ onLogout, busy, error }: { onLogout: () => void; busy: bool
         {error && <p className="error" role="alert">{error}</p>}
         {current === "accounts" && <Accounts />}
         {current === "branches" && <Branches />}
+        {current === "materials" && <Materials />}
+        {current === "references" && <References />}
         {current === "account" && <section className="surface"><h1>حسابي</h1><p>مرحبًا، <bdi>{profile.name}</bdi>.</p></section>}
       </main>
     </>

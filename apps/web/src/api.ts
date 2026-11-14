@@ -4,6 +4,7 @@ const messages: Record<string, string> = {
   invalid_input: "تحقّق من الحقول وأعد المحاولة.",
   duplicate: "الاسم مُستخدم بالفعل. اختر اسمًا آخر.",
   invalid_branch: "اختر شعبة فعّالة.",
+  invalid_reference: "تحقّق من الفئة ووحدة القياس والمورد.",
   protected_account: "يمكنك تعديل بيانات حسابك الأساسية. غيّر كلمة مرورك من مسار المصادقة.",
   rate_limited: "محاولات كثيرة. انتظر 15 دقيقة قبل المحاولة مجددًا.",
   challenge_required: "أكمل التحقق البشري ثم أعد المحاولة.",

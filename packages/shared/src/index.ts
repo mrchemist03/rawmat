@@ -3,6 +3,7 @@ import { loginNameSchema, newPasswordSchema } from "./credentials.js"
 
 export * from "./credentials.js"
 export * from "./management.js"
+export * from "./catalogue.js"
 
 export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm"
-import { check, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
+import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
 
 export const branches = sqliteTable("branches", {
   id: text().primaryKey(),
@@ -58,4 +58,39 @@ export const auditLog = sqliteTable("audit_log", {
   occurredAt: integer("occurred_at").notNull(),
 }, (table) => [
   index("audit_log_action").on(table.action),
+])
+
+export const categories = sqliteTable("categories", {
+  id: text().primaryKey().notNull(),
+  name: text().notNull().unique(),
+})
+
+export const units = sqliteTable("units", {
+  id: text().primaryKey().notNull(),
+  name: text().notNull().unique(),
+})
+
+export const suppliers = sqliteTable("suppliers", {
+  id: text().primaryKey().notNull(),
+  name: text().notNull().unique(),
+  contact: text().notNull().default(""),
+  notes: text().notNull().default(""),
+})
+
+export const materials = sqliteTable("materials", {
+  id: text().primaryKey().notNull(),
+  code: text().notNull().unique(),
+  name: text().notNull(),
+  categoryId: text("category_id").notNull().references(() => categories.id),
+  unitId: text("unit_id").notNull().references(() => units.id),
+  supplierId: text("supplier_id").references(() => suppliers.id),
+  minimumQuantity: real("minimum_quantity").notNull(),
+  notes: text().notNull().default(""),
+  archived: integer({ mode: "boolean" }).notNull().default(false),
+}, (table) => [
+  check("material_minimum_valid", sql`${table.minimumQuantity} between 0 and 1000000000`),
+  index("materials_status_name").on(table.archived, table.name, table.id),
+  index("materials_category").on(table.categoryId),
+  index("materials_unit").on(table.unitId),
+  index("materials_supplier").on(table.supplierId),
 ])

@@ -9,6 +9,7 @@ import { can, navigationFor } from "./modules/auth/permissions.js"
 import { registerAuth } from "./modules/auth/routes.js"
 import type { AuthOptions } from "./modules/auth/routes.js"
 import { challengeOrigin } from "./modules/auth/turnstile.js"
+import { registerCatalogue } from "./modules/catalogue/routes.js"
 import { registerManagement } from "./modules/management/routes.js"
 
 const csp = [
@@ -105,6 +106,7 @@ export function buildApp(
     app.register(async (scope) => {
       const access = await registerAuth(scope, auth)
       registerManagement(scope, access, auth)
+      registerCatalogue(scope, access, auth)
       const meError = z.toJSONSchema(z.strictObject({ error: z.string() }))
       scope.get("/api/me", {
         schema: { response: { 200: z.toJSONSchema(meSchema), 401: meError, 403: meError } },
@@ -120,6 +122,7 @@ export function buildApp(
       })
       for (const [path, permission] of [
         ["/accounts", "manageAccounts"], ["/branches", "manageBranches"],
+        ["/materials", "viewWorkspace"], ["/references", "manageReferenceData"],
       ] as const) {
         scope.get(path, async (request, reply) => {
           const principal = access.principal(request)

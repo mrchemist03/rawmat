@@ -7,22 +7,23 @@ import {
 import type { AccountView, BranchView } from "@rawmat/shared"
 import { rejection, request, unavailable } from "./api"
 
-type Collection = "accounts" | "branches"
-type Result<T> = { items: T[]; total: number }
+type Result = { items: unknown[]; total: number }
 const invalid = "تحقّق من الحقول وأعد المحاولة."
 
-function useCollection<T>(collection: Collection, schema: { parse(input: unknown): Result<T> }) {
-  const [result, setResult] = useState<Result<T>>()
+export function useCollection<R extends Result>(path: string, schema: { parse(input: unknown): R }, filters = "") {
+  const [result, setResult] = useState<R>()
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(1)
   const [version, refresh] = useState(0)
   const [error, setError] = useState("")
   useEffect(() => {
     let current = true
-    const query = new URLSearchParams({ search, page: String(page) })
+    const query = new URLSearchParams(filters)
+    query.set("search", search)
+    query.set("page", String(page))
     setResult(undefined)
     setError("")
-    request(`/api/manage/${collection}?${query}`).then(async (response) => {
+    request(`${path}?${query}`).then(async (response) => {
       if (!current) return
       if (response.status === 404) return window.location.replace("/")
       if (!response.ok) throw new Error()
@@ -30,7 +31,7 @@ function useCollection<T>(collection: Collection, schema: { parse(input: unknown
       if (current) setResult(value)
     }).catch(() => { if (current) setError(unavailable) })
     return () => { current = false }
-  }, [collection, schema, search, page, version])
+  }, [path, schema, filters, search, page, version])
   const updateSearch = useCallback((value: string) => {
     setPage(1)
     setSearch(value)
@@ -41,7 +42,7 @@ function useCollection<T>(collection: Collection, schema: { parse(input: unknown
   }
 }
 
-function Listing<T>({ data, children }: { data: ReturnType<typeof useCollection<T>>; children: ReactNode }) {
+export function Listing({ data, children }: { data: ReturnType<typeof useCollection<Result>>; children: ReactNode }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     data.search(String(new FormData(event.currentTarget).get("search") ?? "").trim())
@@ -65,15 +66,14 @@ function Listing<T>({ data, children }: { data: ReturnType<typeof useCollection<
   )
 }
 
-function useEditor(collection: Collection, id: string | undefined, onSaved: () => void) {
+export function useEditor(path: string, id: string | undefined, onSaved: () => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   async function save(payload: unknown) {
     setBusy(true)
     setError("")
     try {
-      const path = `/api/manage/${collection}${id ? `/${id}` : ""}`
-      const response = await request(path, payload, id ? "PUT" : "POST")
+      const response = await request(id ? `${path}/${id}` : path, payload, id ? "PUT" : "POST")
       if (response.ok) return onSaved()
       setError(await rejection(response))
     } catch {
@@ -85,7 +85,7 @@ function useEditor(collection: Collection, id: string | undefined, onSaved: () =
   return { busy, error, setError, save }
 }
 
-function EditorActions({ busy, error, onClose }: { busy: boolean; error: string; onClose: () => void }) {
+export function EditorActions({ busy, error, onClose }: { busy: boolean; error: string; onClose: () => void }) {
   return (
     <>
       {error && <p role="alert" className="error">{error}</p>}
@@ -100,7 +100,7 @@ function EditorActions({ busy, error, onClose }: { busy: boolean; error: string;
 function BranchEditor({ item, onClose, onSaved }: {
   item: BranchView | null; onClose: () => void; onSaved: () => void
 }) {
-  const editor = useEditor("branches", item?.id, onSaved)
+  const editor = useEditor("/api/manage/branches", item?.id, onSaved)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const fields = new FormData(event.currentTarget)
@@ -125,7 +125,7 @@ function BranchEditor({ item, onClose, onSaved }: {
 }
 
 export function Branches() {
-  const data = useCollection("branches", branchListSchema)
+  const data = useCollection("/api/manage/branches", branchListSchema)
   const [editing, setEditing] = useState<BranchView | null>()
   const [notice, setNotice] = useState("")
   return (
@@ -148,7 +148,7 @@ export function Branches() {
 }
 
 function BranchField({ item }: { item: AccountView | null }) {
-  const data = useCollection("branches", branchListSchema)
+  const data = useCollection("/api/manage/branches", branchListSchema)
   const [selected, setSelected] = useState(item?.branchId ?? "")
   const [selectedName, setSelectedName] = useState(item?.branchName ?? "")
   const [filter, setFilter] = useState("")
@@ -182,7 +182,7 @@ function BranchField({ item }: { item: AccountView | null }) {
 function AccountEditor({ item, onClose, onSaved }: {
   item: AccountView | null; onClose: () => void; onSaved: () => void
 }) {
-  const editor = useEditor("accounts", item?.id, onSaved)
+  const editor = useEditor("/api/manage/accounts", item?.id, onSaved)
   const own = Boolean(item?.isCurrentAccount)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -225,7 +225,7 @@ function AccountEditor({ item, onClose, onSaved }: {
 }
 
 export function Accounts() {
-  const data = useCollection("accounts", accountListSchema)
+  const data = useCollection("/api/manage/accounts", accountListSchema)
   const [editing, setEditing] = useState<AccountView | null>()
   const [notice, setNotice] = useState("")
   return (

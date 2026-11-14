@@ -78,12 +78,14 @@ test("grants purchase approvals to the intended roles and keeps management restr
 })
 
 test("returns only name and navigation for each role and withholds management routes", async () => {
-  expect((await get("/api/me", manager)).json()).toEqual({ name: accountName, navigation: ["account", "accounts", "branches"] })
-  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account"] })
-  expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["account"] })
+  expect((await get("/api/me", manager)).json()).toEqual({
+    name: accountName, navigation: ["account", "materials", "accounts", "branches", "references"],
+  })
+  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account", "materials"] })
+  expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["account", "materials"] })
   expect((await get("/api/me")).statusCode).toBe(401)
   for (const cookie of [undefined, admin, basic]) {
-    for (const path of ["/accounts", "/branches", "/api/manage/accounts", "/api/manage/branches"]) {
+    for (const path of ["/accounts", "/branches", "/references", "/api/manage/accounts", "/api/manage/branches", "/api/manage/catalogue/suppliers"]) {
       expect((await get(path, cookie)).statusCode).toBe(404)
     }
   }
@@ -156,4 +158,61 @@ test("serves the fallback and accepts only a bounded PNG from the branding direc
   const custom = await get("/branding/logo.png")
   expect(custom.headers["cache-control"]).toBe("no-store")
   expect(custom.rawPayload.equals(replacement)).toBe(true)
+})
+
+test("creates, edits, searches, archives and restores materials with the intended permissions", async () => {
+  expect((await get("/api/materials")).statusCode).toBe(404)
+  expect((await get("/materials", basic)).statusCode).toBe(200)
+  expect((await get("/references", manager)).statusCode).toBe(200)
+  expect((await write("/api/manage/catalogue/categories", admin, { name: "فئة المواد" })).statusCode).toBe(404)
+
+  const references = {
+    categories: { name: "مساحيق" },
+    units: { name: "كغ" },
+    suppliers: { name: "مورد تجريبي", contact: "تواصل تجريبي", notes: "ملاحظة إدارية" },
+  }
+  const keys = {} as Record<keyof typeof references, string>
+  for (const kind of ["categories", "units", "suppliers"] as const) {
+    expect((await write(`/api/manage/catalogue/${kind}`, manager, references[kind])).statusCode).toBe(204)
+    expect((await write(`/api/manage/catalogue/${kind}`, manager, references[kind])).statusCode).toBe(409)
+    const item = (await get(`/api/catalogue/${kind}`, basic)).json().items[0]
+    expect(item).toEqual({ id: expect.any(String), name: references[kind].name })
+    keys[kind] = item.id
+  }
+  expect((await get("/api/manage/catalogue/suppliers", manager)).json().items[0])
+    .toEqual({ id: keys.suppliers, ...references.suppliers })
+  expect((await write(`/api/manage/catalogue/suppliers/${keys.suppliers}`, manager, {
+    ...references.suppliers, contact: "تواصل جديد",
+  }, "PUT")).statusCode).toBe(204)
+  expect((await get("/api/manage/catalogue/suppliers", manager)).json().items[0].contact).toBe("تواصل جديد")
+
+  const payload = { name: "دقيق تجريبي", categoryId: keys.categories, unitId: keys.units,
+    supplierId: keys.suppliers, minimumQuantity: 2.5, notes: "ملاحظة المادة" }
+  expect((await write("/api/materials", basic, { ...payload, unitId: randomUUID() })).json().error).toBe("invalid_reference")
+  expect((await write("/api/materials", basic, { ...payload, minimumQuantity: -1 })).statusCode).toBe(400)
+  expect((await write("/api/materials", basic, { ...payload, archived: true })).statusCode).toBe(400)
+  expect((await write("/api/materials", basic, payload)).statusCode).toBe(204)
+  expect((await write("/api/materials", admin, { ...payload, name: "ملح تجريبي", minimumQuantity: 8 })).statusCode).toBe(204)
+
+  const list = (await get("/api/materials?sort=minimum&direction=desc", basic)).json()
+  expect(list.actions).toEqual({ create: true, edit: false, archive: false })
+  expect(list.items.map((item: { minimumQuantity: number }) => item.minimumQuantity)).toEqual([8, 2.5])
+  const { id, code } = list.items[1]
+  expect(code).toMatch(/^MAT-[0-9A-F]+$/)
+  expect((await get(`/api/materials?search=${code.toLowerCase()}`, basic)).json().total).toBe(1)
+  expect((await get(`/api/materials?search=${encodeURIComponent("دقيق")}`, basic)).json().total).toBe(1)
+  expect((await get("/api/materials?sort=price", basic)).statusCode).toBe(400)
+  expect((await write(`/api/materials/${id}`, basic, payload, "PUT")).statusCode).toBe(404)
+  expect((await write(`/api/materials/${id}/archive`, admin, { archived: true }, "PUT")).statusCode).toBe(404)
+  expect((await write(`/api/materials/${id}`, manager, { ...payload, name: "دقيق محدّث" }, "PUT")).statusCode).toBe(204)
+  expect((await write(`/api/materials/${id}/archive`, manager, { archived: true }, "PUT")).statusCode).toBe(204)
+  expect((await get("/api/materials", basic)).json().total).toBe(1)
+  const archive = (await get("/api/materials?status=archived", basic)).json()
+  expect(archive.items[0]).toMatchObject({ id, code, name: "دقيق محدّث", archived: true, supplierName: references.suppliers.name })
+  expect(archive.items[0]).not.toHaveProperty("contact")
+  expect((await write(`/api/materials/${id}`, manager, payload, "PUT")).statusCode).toBe(404)
+  expect((await write(`/api/materials/${id}/archive`, manager, { archived: false }, "PUT")).statusCode).toBe(204)
+  expect((await get("/api/materials", basic)).json().total).toBe(2)
+  expect(database.db.select().from(auditLog).all().slice(-3).map((item) => item.action))
+    .toEqual(["material_updated", "material_archived", "material_restored"])
 })
