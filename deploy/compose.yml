@@ -1,0 +1,23 @@
+name: ${COMPOSE_PROJECT_NAME:-rawmat}
+
+services:
+  app:
+    extends:
+      file: compose.common.yml
+      service: app
+    image: ${APP_IMAGE:?Set APP_IMAGE to the application image}
+    restart: unless-stopped
+    environment:
+      APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS origin}
+    networks:
+      default: {}
+      edge:
+        aliases: ["${COMPOSE_PROJECT_NAME:-rawmat}-web"]
+
+volumes:
+  data: {}
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:?Set EDGE_NETWORK to the reverse proxy network}

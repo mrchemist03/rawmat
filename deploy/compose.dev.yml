@@ -1,0 +1,17 @@
+name: rawmat-dev
+
+services:
+  app:
+    extends:
+      file: compose.common.yml
+      service: app
+    image: rawmat:dev
+    build:
+      context: ..
+    environment:
+      APP_URL: http://127.0.0.1:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  data: {}

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan Git history for secrets
+        shell: bash
+        run: |
+          tool_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tool_dir"' EXIT
+          curl --fail --silent --show-error --location --output "$tool_dir/gitleaks.tar.gz" \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          (
+            cd "$tool_dir"
+            echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum -c -
+            tar -xzf gitleaks.tar.gz gitleaks
+          )
+          "$tool_dir/gitleaks" git --log-opts='--all' --redact --no-banner .
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - run: npm test
+
+      - name: Build and verify the container
+        run: |
+          docker compose --env-file deploy/.env.example -f deploy/compose.yml config --quiet
+          docker compose -f deploy/compose.dev.yml up --build --wait --wait-timeout 70
+          test "$(curl --fail --silent --show-error http://127.0.0.1:8080/healthz)" = '{"status":"ok"}'
+          curl --fail --silent --show-error http://127.0.0.1:8080/ -o "$RUNNER_TEMP/rawmat-index.html"
+          grep -F 'lang="ar" dir="rtl"' "$RUNNER_TEMP/rawmat-index.html"
+          asset="$(sed -n 's/.*src="\(\/assets\/[^"]*\.js\)".*/\1/p' "$RUNNER_TEMP/rawmat-index.html")"
+          test -n "$asset"
+          curl --fail --silent --show-error "http://127.0.0.1:8080$asset" -o /dev/null
+
+      - name: Scan locked dependencies and the image, and generate an SBOM
+        shell: bash
+        run: |
+          tool_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tool_dir"' EXIT
+          curl --fail --silent --show-error --location --output "$tool_dir/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz
+          (
+            cd "$tool_dir"
+            echo 'bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf  trivy.tar.gz' | sha256sum -c -
+            tar -xzf trivy.tar.gz trivy
+          )
+          "$tool_dir/trivy" fs --scanners vuln --include-dev-deps --severity HIGH,CRITICAL --exit-code 1 package-lock.json
+          "$tool_dir/trivy" image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 rawmat:dev
+          "$tool_dir/trivy" image --format cyclonedx --output "$RUNNER_TEMP/rawmat-image.cdx.json" rawmat:dev
+          "$tool_dir/trivy" fs --include-dev-deps --format cyclonedx --output "$RUNNER_TEMP/rawmat-npm.cdx.json" package-lock.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rawmat-sbom
+          path: |
+            ${{ runner.temp }}/rawmat-image.cdx.json
+            ${{ runner.temp }}/rawmat-npm.cdx.json
+          if-no-files-found: error
+
+      - name: Remove test containers
+        if: always()
+        run: docker compose -f deploy/compose.dev.yml down --volumes
