@@ -118,6 +118,8 @@ export const purchaseRequests = sqliteTable("purchase_requests", {
   revision: integer().notNull().default(1),
   createdAt: integer("created_at").notNull(),
   submittedAt: integer("submitted_at"),
+  decisionReason: text("decision_reason"),
+  orderedAt: integer("ordered_at"),
 }, (table) => [
   check("purchase_requests_status_valid", sql`${table.status} in ('draft','submitted','approved','rejected','ordered','partially_received','received','cancelled')`),
   check("purchase_requests_revision_valid", sql`${table.revision} >= 1`),
@@ -135,10 +137,44 @@ export const purchaseRequestItems = sqliteTable("purchase_request_items", {
   materialId: text("material_id").notNull().references(() => materials.id),
   quantity: real().notNull(),
   receivedQuantity: real("received_quantity").notNull().default(0),
+  receivedExact: text("received_exact").notNull().default("0"),
 }, (table) => [
   uniqueIndex("purchase_items_request_material").on(table.requestId, table.materialId),
   uniqueIndex("purchase_items_request_position").on(table.requestId, table.position),
   index("purchase_items_material").on(table.materialId),
   check("purchase_items_quantity_valid", sql`${table.quantity} > 0 and ${table.quantity} <= 1000000000`),
   check("purchase_items_received_valid", sql`${table.receivedQuantity} between 0 and ${table.quantity}`),
+])
+
+export const purchaseItemCosts = sqliteTable("purchase_item_costs", {
+  itemId: text("item_id").primaryKey().notNull().references(() => purchaseRequestItems.id, { onDelete: "cascade" }),
+  unitPriceMinor: integer("unit_price_minor").notNull(),
+  currency: text().notNull(),
+}, (table) => [
+  check("purchase_item_price_valid", sql`${table.unitPriceMinor} between 0 and 1000000000000`),
+  check("purchase_item_currency_valid", sql`${table.currency} glob '[A-Z][A-Z][A-Z]'`),
+])
+
+export const materialCosts = sqliteTable("material_costs", {
+  materialId: text("material_id").notNull().references(() => materials.id),
+  currency: text().notNull(),
+  lastUnitPriceMinor: integer("last_unit_price_minor").notNull(),
+  averageUnitPriceMinor: integer("average_unit_price_minor").notNull(),
+}, (table) => [
+  uniqueIndex("material_costs_material_currency").on(table.materialId, table.currency),
+])
+
+export const stockMovements = sqliteTable("stock_movements", {
+  id: text().primaryKey().notNull(),
+  branchId: text("branch_id").notNull().references(() => branches.id),
+  materialId: text("material_id").notNull().references(() => materials.id),
+  quantity: text().notNull(),
+  kind: text().notNull(),
+  referenceId: text("reference_id").notNull(),
+  referenceItemId: text("reference_item_id").notNull(),
+  referenceRevision: integer("reference_revision").notNull(),
+  occurredAt: integer("occurred_at").notNull(),
+}, (table) => [
+  uniqueIndex("stock_movements_reference").on(table.kind, table.referenceId, table.referenceItemId, table.referenceRevision),
+  index("stock_movements_material_branch").on(table.materialId, table.branchId),
 ])

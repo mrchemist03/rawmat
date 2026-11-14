@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, test } from "vitest"
 import { buildApp } from "../src/app.js"
 import { readServerConfig } from "../src/config.js"
 import { openDatabase } from "../src/db/database.js"
-import { auditLog, branches, categories, materials, units, users } from "../src/db/schema.js"
+import { auditLog, branches, categories, materialCosts, materials, purchaseItemCosts, stockMovements, units, users } from "../src/db/schema.js"
 import { hashPassword } from "../src/modules/auth/passwords.js"
 
 const origin = "https://rawmat.example.invalid"
@@ -129,4 +129,94 @@ test("validates scope, references, signs of quantities and strict mutation field
   } finally {
     db.db.update(materials).set({ archived: false }).where(eq(materials.id, ids.material)).run()
   }
+})
+
+test("isolates exact monetary values and records partial and complete receipts atomically", async () => {
+  const url = await create()
+  const id = url.split("/").at(-1)!
+  const draftDetail = (await fetchAs("owner", url)).json()
+  const [first, second] = draftDetail.items
+  const priceRows = [
+    { itemId: first.id, currency: "TRY", unitPriceMinor: 12345 },
+    { itemId: second.id, currency: "USD", unitPriceMinor: 67890 },
+  ]
+  const decision = (actor: string, payload: Record<string, unknown>) => write(actor, url + "/decision", payload)
+  const receipt = (actor: string, revision: number, items: { itemId: string; quantity: string | number }[]) =>
+    write(actor, url + "/receipts", { revision, items })
+  expect((await write("owner", url + "/transition", { revision: 1, status: "submitted" })).statusCode).toBe(204)
+  expect((await decision("owner", { revision: 2, status: "approved", prices: priceRows })).statusCode).toBe(404)
+  expect((await decision("other", { revision: 2, status: "ordered" })).statusCode).toBe(409)
+  expect((await decision("other", { revision: 2, status: "rejected", reason: " " })).statusCode).toBe(400)
+  expect((await decision("other", { revision: 2, status: "approved", prices: [priceRows[0]] })).statusCode).toBe(400)
+  expect(db.db.select().from(purchaseItemCosts).all()).toHaveLength(0)
+  expect((await decision("other", { revision: 2, status: "approved" })).statusCode).toBe(204)
+  expect((await decision("other", { revision: 3, status: "ordered" })).json()).toEqual({ error: "prices_required" })
+  expect((await decision("other", { revision: 3, status: "ordered", prices: priceRows })).statusCode).toBe(204)
+  for (const actor of ["other", "manager"]) {
+    const result = await fetchAs(actor, url + "/costs")
+    expect(result.statusCode).toBe(200)
+    expect(result.json().totals).toEqual([
+      { currency: "TRY", totalMinor: "30863" }, { currency: "USD", totalMinor: "203670" },
+    ])
+  }
+  const averages = db.db.select().from(materialCosts).all()
+  expect(averages.find(({ materialId }) => materialId === ids.material)).toMatchObject({
+    currency: "TRY", averageUnitPriceMinor: 12345, lastUnitPriceMinor: 12345,
+  })
+
+  const excessive = [{ itemId: first.id, quantity: 0.1 }, { itemId: second.id, quantity: 4 }]
+  expect((await receipt("owner", 4, excessive)).json()).toEqual({ error: "invalid_receipt" })
+  expect(db.db.select().from(stockMovements).all()).toHaveLength(0)
+  const partial = [{ itemId: first.id, quantity: 0.1 }]
+  expect((await receipt("owner", 4, partial)).statusCode).toBe(204)
+  expect((await receipt("owner", 4, partial)).statusCode).toBe(204)
+  expect((await receipt("owner", 4, [{ itemId: first.id, quantity: 0.2 }])).statusCode).toBe(409)
+  expect((await fetchAs("owner", url)).json()).toMatchObject({ status: "partially_received", revision: 5 })
+  expect((await decision("other", { revision: 5, status: "cancelled", reason: "اختبار" })).statusCode).toBe(409)
+  expect((await receipt("owner", 5, [{ itemId: first.id, quantity: "0.200000000000000001" }])).statusCode).toBe(204)
+  const ready = (await fetchAs("owner", url)).json()
+  expect(ready.items[0].remainingExact).toBe("2.199999999999999999")
+  expect((await receipt("owner", 6, [
+    { itemId: first.id, quantity: ready.items[0].remainingExact }, { itemId: second.id, quantity: "3" },
+  ])).statusCode).toBe(204)
+  expect((await fetchAs("owner", url)).json()).toMatchObject({ status: "received", revision: 7 })
+  expect(db.db.select().from(stockMovements).all()).toHaveLength(4)
+  expect(() => db.db.delete(stockMovements).run()).toThrow()
+  const stock = "/api/materials/" + ids.material + "/stock"
+  expect((await fetchAs("owner", stock)).json()).toEqual({
+    items: [{ branchId: ids.branch, branchName: "شعبة الطلب", quantity: "2.5" }], total: 1,
+  })
+
+  const ordinaryResponses = await Promise.all([
+    fetchAs("owner", "/api/me"), fetchAs("owner", "/api/auth/session"), fetchAs("owner", "/api/auth/config"),
+    fetchAs("owner", "/api/materials"), fetchAs("owner", "/api/materials/similarity?name=test&unitId=" + ids.unit),
+    fetchAs("owner", "/api/catalogue/categories"), fetchAs("owner", "/api/catalogue/units"), fetchAs("owner", "/api/catalogue/suppliers"),
+    fetchAs("owner", endpoint + "/branches"), fetchAs("owner", endpoint), fetchAs("owner", url), fetchAs("owner", stock),
+    fetchAs("owner", url + "/costs"), fetchAs("owner", "/api/manage/audit"),
+    fetchAs("owner", "/api/manage/accounts"), fetchAs("owner", "/api/manage/branches"),
+    fetchAs("owner", "/api/manage/catalogue/suppliers"), fetchAs("owner", "/healthz"),
+    fetchAs("owner", endpoint + "?sort=unitPriceMinor"), decision("owner", { revision: 2, status: "approved", prices: priceRows }),
+  ])
+  for (const response of ordinaryResponses) {
+    expect([200, 400, 404]).toContain(response.statusCode)
+    expect(response.body).not.toMatch(/"(?:[^"]*(?:cost|price|currency)[^"]*|totals|totalMinor)"\s*:/i)
+    expect(response.body).not.toMatch(/:\s*"?(?:12345|67890|30863|203670)"?(?:[,}\]])/)
+  }
+  expect((await fetchAs("owner", url + "/costs")).statusCode).toBe(404)
+  expect((await fetchAs("owner", endpoint + "?sort=unitPriceMinor")).statusCode).toBe(400)
+  const entries = db.db.select().from(auditLog).where(eq(auditLog.entityId, id)).all()
+  expect(entries.filter(({ action }) => action === "purchase_receipt")).toHaveLength(3)
+  expect(JSON.stringify(entries)).not.toMatch(/unitPriceMinor|12345|67890/)
+})
+
+test("requires a rejection reason and prevents further transitions after rejection or cancellation", async () => {
+  const rejected = await create()
+  await write("owner", rejected + "/transition", { revision: 1, status: "submitted" })
+  expect((await write("manager", rejected + "/decision", { revision: 2, status: "rejected", reason: "طلب مكرر" })).statusCode).toBe(204)
+  expect((await fetchAs("owner", rejected)).json()).toMatchObject({ status: "rejected", decisionReason: "طلب مكرر" })
+  expect((await write("manager", rejected + "/decision", { revision: 3, status: "approved" })).statusCode).toBe(409)
+  const cancelled = await create()
+  await write("owner", cancelled + "/transition", { revision: 1, status: "submitted" })
+  expect((await write("manager", cancelled + "/decision", { revision: 2, status: "cancelled", reason: "انتهت الحاجة" })).statusCode).toBe(204)
+  expect((await fetchAs("owner", cancelled)).json()).toMatchObject({ status: "cancelled", decisionReason: "انتهت الحاجة" })
 })

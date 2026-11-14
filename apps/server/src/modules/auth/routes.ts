@@ -18,6 +18,7 @@ export type AuthOptions = {
   now?: () => number
   verifyChallenge?: typeof verifyTurnstile
   similarityThresholds?: SimilarityThresholds
+  baseCurrency?: string
 }
 
 const sessionCookie = "__Host-rawmat"

@@ -1,11 +1,13 @@
 import {
-  listQuerySchema, purchaseBranchListSchema, purchaseDetailSchema, purchaseIdSchema, purchaseInputSchema,
-  purchaseListSchema, purchaseQuerySchema, purchaseTransitionSchema, purchaseUpdateSchema,
+  listQuerySchema, purchaseBranchListSchema, purchaseCostsSchema, purchaseDecisionSchema, purchaseDetailSchema,
+  purchaseIdSchema, purchaseInputSchema, purchaseListSchema, purchaseQuerySchema, purchaseReceiptSchema,
+  purchaseTransitionSchema, purchaseUpdateSchema,
 } from "@rawmat/shared"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { can } from "../auth/permissions.js"
 import type { AuthAccess, AuthOptions } from "../auth/routes.js"
 import { createPurchaseRepository } from "./repository.js"
+import { readPurchaseCosts } from "./costs.js"
 
 export function registerPurchases(app: FastifyInstance, auth: AuthAccess, options: AuthOptions) {
   const repository = createPurchaseRepository(options.db, options.now ?? Date.now)
@@ -28,13 +30,18 @@ export function registerPurchases(app: FastifyInstance, auth: AuthAccess, option
       reply.header("Retry-After", "900").code(429).send({ error: "rate_limited" })
       return
     }
-    return { id: current.id, canCreate: can(current.role, "createOperations"), canManage: can(current.role, "manageRecords") }
+    return {
+      id: current.id, canCreate: can(current.role, "createOperations"), canManage: can(current.role, "manageRecords"),
+      canApprove: can(current.role, "approvePurchases"), canViewCosts: can(current.role, "viewCosts"),
+    }
   }
 
-  function finish(reply: FastifyReply, result: ReturnType<typeof repository.update>) {
+  function finish(reply: FastifyReply, result:
+    ReturnType<typeof repository.update | typeof repository.decide | typeof repository.receive>) {
     if (result === "saved") return reply.code(204).send()
     if (result === "missing") return notFound(reply)
-    return reply.code(result === "invalid_purchase_reference" ? 400 : 409).send({ error: result })
+    const invalid = ["invalid_purchase_reference", "invalid_price_items", "invalid_receipt"].includes(result)
+    return reply.code(invalid ? 400 : 409).send({ error: result })
   }
 
   app.get("/api/purchases", async (request, reply) => {
@@ -90,5 +97,35 @@ export function registerPurchases(app: FastifyInstance, auth: AuthAccess, option
     const input = purchaseTransitionSchema.safeParse(request.body)
     if (!input.success) return invalid(reply)
     return finish(reply, repository.transition(actor, params.data.id, input.data.status, input.data.revision))
+  })
+
+  app.get("/api/purchases/:id/costs", async (request, reply) => {
+    const actor = authorize(request, reply)
+    if (!actor) return
+    if (!actor.canViewCosts) return notFound(reply)
+    const params = purchaseIdSchema.safeParse(request.params)
+    if (!params.success || !repository.exists(params.data.id)) return notFound(reply)
+    return purchaseCostsSchema.parse(readPurchaseCosts(options.db, params.data.id, options.baseCurrency ?? "TRY"))
+  })
+
+  app.post("/api/purchases/:id/decision", { bodyLimit: 32_768 }, async (request, reply) => {
+    const actor = authorize(request, reply, true)
+    if (!actor) return
+    if (!actor.canApprove || !actor.canViewCosts) return notFound(reply)
+    const params = purchaseIdSchema.safeParse(request.params)
+    if (!params.success) return notFound(reply)
+    const input = purchaseDecisionSchema.safeParse(request.body)
+    if (!input.success) return invalid(reply)
+    return finish(reply, repository.decide(actor, params.data.id, input.data))
+  })
+
+  app.post("/api/purchases/:id/receipts", { bodyLimit: 16_384 }, async (request, reply) => {
+    const actor = authorize(request, reply, true)
+    if (!actor) return
+    const params = purchaseIdSchema.safeParse(request.params)
+    if (!params.success) return notFound(reply)
+    const input = purchaseReceiptSchema.safeParse(request.body)
+    if (!input.success) return invalid(reply)
+    return finish(reply, repository.receive(actor, params.data.id, input.data))
   })
 }

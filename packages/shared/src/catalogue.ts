@@ -70,6 +70,12 @@ export type SimilarityReport = z.infer<typeof similarityReportSchema>
 export type LookupKind = z.infer<typeof lookupKindSchema>
 export type MaterialInput = z.infer<typeof materialInputSchema>
 export type MaterialView = z.infer<typeof materialViewSchema>
+export const materialStockSchema = z.strictObject({
+  items: z.array(z.strictObject({
+    branchId: z.uuid(), branchName: z.string(), quantity: z.string().regex(/^-?\d+(?:\.\d+)?$/),
+  })),
+  total: z.number().int(),
+})
 export type MaterialQuery = z.infer<typeof materialQuerySchema>
 export type ReferenceOption = z.infer<typeof referenceOptionSchema>
 export type SupplierInput = z.infer<typeof supplierInputSchema>

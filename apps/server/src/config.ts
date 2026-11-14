@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto"
+import { purchaseCurrencySchema } from "@rawmat/shared"
 import ipaddr from "ipaddr.js"
 import { z } from "zod"
 import { defaultThresholds } from "./modules/catalogue/similarity.js"
@@ -55,5 +56,6 @@ export function readServerConfig(env: NodeJS.ProcessEnv) {
     databasePath: env.DATABASE_PATH || "./data/rawmat.sqlite",
     turnstile: siteKey && secretKey ? { siteKey, secretKey } : undefined,
     similarityThresholds: { warning, high },
+    baseCurrency: purchaseCurrencySchema.parse(env.BASE_CURRENCY || "TRY"),
   }
 }

@@ -1,6 +1,6 @@
 import {
   csvLimit, importQuerySchema, importReportSchema, listQuerySchema, lookupKindSchema, materialListSchema, materialQuerySchema,
-  materialWriteSchema, mergeMaterialSchema, similarityCheckSchema, similarityReportSchema,
+  materialStockSchema, materialWriteSchema, mergeMaterialSchema, similarityCheckSchema, similarityReportSchema,
   referenceInputSchema, referenceListSchema, supplierInputSchema, supplierListSchema,
 } from "@rawmat/shared"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
@@ -10,6 +10,7 @@ import type { AuthAccess, AuthOptions } from "../auth/routes.js"
 import { createCatalogueRepository } from "./repository.js"
 import { readMaterialsCsv } from "./csv.js"
 import { defaultThresholds } from "./similarity.js"
+import { materialBalances } from "../inventory/repository.js"
 
 const idParams = z.strictObject({ id: z.uuid() })
 const archiveInput = z.strictObject({ archived: z.boolean() })
@@ -38,7 +39,7 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
     return current
   }
 
-  function finish(reply: FastifyReply, result: "saved" | "missing" | "duplicate" | "invalid_reference" | "invalid_name" | "invalid_merge") {
+  function finish(reply: FastifyReply, result: "saved" | "missing" | "duplicate" | "invalid_reference" | "invalid_name" | "invalid_merge" | "material_unit_in_use") {
     switch (result) {
       case "saved": return reply.code(204).send()
       case "missing": return reply.code(404).send({ error: "not_found" })
@@ -46,6 +47,7 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
       case "invalid_reference": return reply.code(400).send({ error: result })
       case "invalid_name": return reply.code(400).send({ error: result })
       case "invalid_merge": return reply.code(409).send({ error: result })
+      case "material_unit_in_use": return reply.code(409).send({ error: result })
     }
   }
 
@@ -66,6 +68,16 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
         overrideSimilarity: can(principal.role, "overrideSimilarity"),
       },
     }
+  })
+
+  app.get("/api/materials/:id/stock", async (request, reply) => {
+    if (!authorize(request, reply, "viewWorkspace")) return
+    const params = idParams.safeParse(request.params)
+    if (!params.success) return finish(reply, "missing")
+    const query = listQuerySchema.safeParse(request.query)
+    if (!query.success) return reply.code(400).send({ error: "invalid_input" })
+    const result = materialBalances(options.db, params.data.id, query.data.page ?? 1)
+    return result ? materialStockSchema.parse(result) : finish(reply, "missing")
   })
 
   app.get("/api/materials/similarity", {

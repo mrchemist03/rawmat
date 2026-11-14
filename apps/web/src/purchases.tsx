@@ -7,6 +7,7 @@ import {
 import type { PurchaseDetail, PurchaseStatus, ReferenceOption } from "@rawmat/shared"
 import { rejection, request, unavailable } from "./api"
 import { EditorActions, Listing, useCollection, useEditor } from "./management"
+import { PurchaseOperations } from "./purchase-operations"
 
 const path = "/api/purchases"
 const statusLabels: Record<PurchaseStatus, string> = {
@@ -113,8 +114,8 @@ function PurchaseEditor({ initial, onClose, onSaved }: {
   </section>
 }
 
-function PurchaseDetails({ item, edit, submitted, onClose }: {
-  item: PurchaseDetail; edit: () => void; submitted: () => void; onClose: () => void
+function PurchaseDetails({ item, edit, submitted, changed, onClose }: {
+  item: PurchaseDetail; edit: () => void; submitted: () => void; changed: (message: string) => void; onClose: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
@@ -137,8 +138,10 @@ function PurchaseDetails({ item, edit, submitted, onClose }: {
     <p>{item.branchName} · <bdi>{item.neededOn}</bdi> · {statusLabels[item.status]}</p>
     <p>مقدّم الطلب {item.requesterName}{item.supplierName && ` · المورد ${item.supplierName}`}</p>
     {item.notes && <p className="table-note">{item.notes}</p>}
+    {item.decisionReason && <p className="table-note">السبب {item.decisionReason}</p>}
     <ul>{item.items.map((line) => <li key={line.materialId}>
       {line.name} · <bdi>{number.format(line.quantity)}</bdi> {line.unitName}{line.archived && " (مؤرشفة)"}
+      {line.receivedQuantity > 0 && <> · المستلم <bdi>{number.format(line.receivedQuantity)}</bdi></>}
     </li>)}</ul>
     {error && <p role="alert" className="error">{error}</p>}
     <div className="actions">
@@ -148,6 +151,7 @@ function PurchaseDetails({ item, edit, submitted, onClose }: {
       {confirm && <button type="button" className="secondary" onClick={() => setConfirm(false)} disabled={busy}>إلغاء الإرسال</button>}
       <button type="button" className="secondary" onClick={onClose} disabled={busy}>إغلاق التفاصيل</button>
     </div>
+    <PurchaseOperations item={item} changed={changed} />
   </section>
 }
 
@@ -204,7 +208,7 @@ export function Purchases() {
         refresh("تم حفظ المسودة.")
       }} />}
     {!editing && detail && <PurchaseDetails key={`${detail.id}:${detail.revision}`} item={detail}
-      edit={() => setEditing(true)} submitted={() => refresh("أُرسل الطلب للاعتماد.")} onClose={() => show()} />}
+      edit={() => setEditing(true)} submitted={() => refresh("أُرسل الطلب للاعتماد.")} changed={refresh} onClose={() => show()} />}
     {selected && !editing && !detail && !error && <p role="status">جارٍ تحميل الطلب…</p>}
     <div className="catalogue-filters">
       <label><span id="purchase-status">الحالة</span><select aria-labelledby="purchase-status" value={status}

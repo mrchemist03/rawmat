@@ -18,6 +18,11 @@ const actions: Record<string, string> = {
   purchase_created: "إنشاء مسودة شراء",
   purchase_updated: "تعديل مسودة شراء",
   purchase_submitted: "إرسال طلب شراء",
+  purchase_approved: "اعتماد طلب شراء",
+  purchase_rejected: "رفض طلب شراء",
+  purchase_ordered: "تأكيد الشراء",
+  purchase_cancelled: "إلغاء طلب شراء",
+  purchase_receipt: "تسجيل استلام",
   reference_created: "إضافة سجل مرجعي",
   reference_updated: "تعديل سجل مرجعي",
 }

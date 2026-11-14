@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 import { pageSize } from "@rawmat/shared"
 import type { LookupKind, MaterialInput, MaterialQuery, SimilarityReport, SupplierInput } from "@rawmat/shared"
 import type { AppDatabase } from "../../db/database.js"
-import { auditLog, categories, materials, suppliers, units } from "../../db/schema.js"
+import { auditLog, categories, materials, purchaseRequestItems, stockMovements, suppliers, units } from "../../db/schema.js"
 import { normalizeMaterialName, similarityIndex } from "./similarity.js"
 import type { SimilarityThresholds } from "./similarity.js"
 import type { CsvRow } from "./csv.js"
@@ -21,7 +21,7 @@ const materialFields = {
 type CatalogueConnection = Pick<AppDatabase, "select" | "insert" | "update">
 type Snapshot = typeof auditLog.$inferInsert.before
 type Review = { confirm?: boolean; canOverride: boolean }
-type WriteResult = "saved" | "missing" | "invalid_reference" | "invalid_name" | { similarity: SimilarityReport }
+type WriteResult = "saved" | "missing" | "invalid_reference" | "invalid_name" | "material_unit_in_use" | { similarity: SimilarityReport }
 
 export function createCatalogueRepository(db: AppDatabase, now: () => number, thresholds: SimilarityThresholds) {
   function audit(tx: Pick<AppDatabase, "insert">, actorId: string, action: string, entity: string, entityId: string,
@@ -47,6 +47,11 @@ export function createCatalogueRepository(db: AppDatabase, now: () => number, th
     const original = id ? tx.select().from(materials)
       .where(and(eq(materials.id, id), eq(materials.archived, false))).get() : undefined
     if (id && !original) return "missing"
+    if (original && original.unitId !== input.unitId && (
+      tx.select({ id: purchaseRequestItems.id }).from(purchaseRequestItems).where(eq(purchaseRequestItems.materialId, original.id)).get() ||
+      tx.select({ id: stockMovements.id }).from(stockMovements).where(eq(stockMovements.materialId, original.id)).get() ||
+      tx.select({ id: materials.id }).from(materials).where(eq(materials.mergedIntoId, original.id)).get()
+    )) return "material_unit_in_use"
     const normalized = normalizeMaterialName(input.name)
     if (!normalized) return "invalid_name"
     if (validateReferences) {

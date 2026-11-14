@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     environment:
       APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS origin}
+      BASE_CURRENCY: ${BASE_CURRENCY:-TRY}
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET to 32 random bytes in hexadecimal}
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-}
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}

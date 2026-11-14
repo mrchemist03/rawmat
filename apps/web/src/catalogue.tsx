@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import {
-  materialInputSchema, materialListSchema, materialSortSchema, materialStatusSchema, pageSize, similarityReportSchema,
+  materialInputSchema, materialListSchema, materialSortSchema, materialStatusSchema, materialStockSchema, pageSize, similarityReportSchema,
   referenceInputSchema, referenceListSchema, supplierInputSchema, supplierListSchema,
 } from "@rawmat/shared"
 import type { LookupKind, MaterialView, ReferenceOption, SimilarityReport, SupplierInput } from "@rawmat/shared"
@@ -55,6 +55,23 @@ function ReferenceField({ kind, label, initial, optional = false, onSelect }: {
 
 function materialLink(id: string) {
   return `/materials?id=${encodeURIComponent(id)}`
+}
+
+function MaterialStock({ id }: { id: string }) {
+  const stock = useCollection(`${materialPath}/${id}/stock`, materialStockSchema)
+  const pages = Math.ceil((stock.result?.total ?? 0) / pageSize)
+  return <section className="editor">
+    <h2>الرصيد حسب الشعبة</h2>
+    {stock.error && <p role="alert" className="error">{stock.error}</p>}
+    {!stock.result && !stock.error && <p role="status">جارٍ تحميل الرصيد…</p>}
+    {stock.result?.items.length === 0 && <p>لا توجد حركات مخزون لهذه المادة.</p>}
+    {stock.result?.items.length ? <ul>{stock.result.items.map(({ branchId, branchName, quantity }) =>
+      <li key={branchId}>{branchName} · <bdi>{quantity}</bdi></li>)}</ul> : null}
+    {pages > 1 && <div className="actions">
+      <button className="secondary" disabled={stock.page <= 1} onClick={() => stock.setPage(stock.page - 1)}>السابق</button>
+      <button className="secondary" disabled={stock.page >= pages} onClick={() => stock.setPage(stock.page + 1)}>التالي</button>
+    </div>}
+  </section>
 }
 
 function MaterialEditor({ item, canOverride, onClose, onSaved }: {
@@ -198,6 +215,7 @@ export function Materials() {
         </div>}
       </div>
       {focus && <p><a href="/materials">عرض كل المواد</a></p>}
+      {focus && data.result?.items.length === 1 && <MaterialStock id={focus} />}
       {notice && <p role="status" className="notice">{notice}</p>}
       {importing && <MaterialImport canOverride={Boolean(actions?.overrideSimilarity)} onClose={() => setImporting(false)} onSaved={data.refresh} />}
       {merging && <MergeEditor key={merging.id} item={merging} onClose={() => setMerging(undefined)} onSaved={() => saved("تم دمج المادة.")} />}
@@ -228,7 +246,7 @@ export function Materials() {
             {showActions && <th scope="col">الإجراءات</th>}
           </tr></thead>
           <tbody>{data.result.items.map((item) => <tr key={item.id}>
-            <th scope="row">{item.name}{item.notes && <small className="table-note">{item.notes}</small>}</th>
+            <th scope="row"><a href={materialLink(item.id)}>{item.name}</a>{item.notes && <small className="table-note">{item.notes}</small>}</th>
             <td><bdi className="material-code">{item.code}</bdi></td><td>{item.categoryName}</td><td>{item.unitName}</td>
             <td><bdi>{numberFormat.format(item.minimumQuantity)}</bdi></td><td>{item.supplierName ?? "—"}</td>
             <td>{item.mergedIntoId ? <a href={materialLink(item.mergedIntoId)}>دُمجت</a> : item.archived ? "مؤرشفة" : "فعّالة"}</td>
