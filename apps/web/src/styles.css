@@ -97,6 +97,9 @@ th { font-weight: 700; }
 .catalogue-filters .secondary { margin: 0; }
 .table-note { display: block; font-weight: 400; white-space: pre-wrap; overflow-wrap: anywhere; }
 .material-code { display: inline-block; max-inline-size: 105px; overflow-wrap: anywhere; font-size: .9rem; }
+.import-report { border: 1px solid #d8e5de; border-radius: 8px; padding: 12px; margin-block: 10px; }
+.import-report ul { padding-inline-start: 24px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 570px) {
   .topbar nav { order: 3; flex-basis: 100%; }

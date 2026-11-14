@@ -11,6 +11,7 @@
     "@fastify/cookie": "11.1.5",
     "@fastify/static": "10.1.11",
     "@rawmat/shared": "0.1.0",
+    "csv-parse": "7.0.3",
     "drizzle-orm": "1.0.0-rc.5",
     "fastify": "5.12.8",
     "ipaddr.js": "2.5.0",

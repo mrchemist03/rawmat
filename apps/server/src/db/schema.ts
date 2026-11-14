@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm"
 import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
+import { uniqueIndex } from "drizzle-orm/sqlite-core"
 
 export const branches = sqliteTable("branches", {
   id: text().primaryKey(),
@@ -56,6 +58,8 @@ export const auditLog = sqliteTable("audit_log", {
   entity: text().notNull(),
   entityId: text("entity_id").notNull(),
   occurredAt: integer("occurred_at").notNull(),
+  before: text({ mode: "json" }).$type<Record<string, string | boolean | number | null>>(),
+  after: text({ mode: "json" }).$type<Record<string, string | boolean | number | null>>(),
 }, (table) => [
   index("audit_log_action").on(table.action),
 ])
@@ -81,16 +85,22 @@ export const materials = sqliteTable("materials", {
   id: text().primaryKey().notNull(),
   code: text().notNull().unique(),
   name: text().notNull(),
+  nameNormalized: text("name_normalized").notNull().default(""),
+  legacyDuplicate: integer("legacy_duplicate", { mode: "boolean" }).notNull().default(false),
   categoryId: text("category_id").notNull().references(() => categories.id),
   unitId: text("unit_id").notNull().references(() => units.id),
   supplierId: text("supplier_id").references(() => suppliers.id),
   minimumQuantity: real("minimum_quantity").notNull(),
   notes: text().notNull().default(""),
   archived: integer({ mode: "boolean" }).notNull().default(false),
+  mergedIntoId: text("merged_into_id").references((): AnySQLiteColumn => materials.id),
 }, (table) => [
   check("material_minimum_valid", sql`${table.minimumQuantity} between 0 and 1000000000`),
   index("materials_status_name").on(table.archived, table.name, table.id),
   index("materials_category").on(table.categoryId),
   index("materials_unit").on(table.unitId),
   index("materials_supplier").on(table.supplierId),
+  uniqueIndex("materials_normalized_unit_unique").on(table.nameNormalized, table.unitId)
+    .where(sql`${table.mergedIntoId} is null and ${table.legacyDuplicate} = 0 and ${table.nameNormalized} <> ''`),
+  index("materials_merge_target").on(table.mergedIntoId),
 ])

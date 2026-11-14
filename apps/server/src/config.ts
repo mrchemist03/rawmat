@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import ipaddr from "ipaddr.js"
 import { z } from "zod"
+import { defaultThresholds } from "./modules/catalogue/similarity.js"
 
 const appUrlSchema = z.url().transform((value) => new URL(value)).refine((url) => {
   const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
@@ -42,11 +43,17 @@ export function readServerConfig(env: NodeJS.ProcessEnv) {
 
   const proxyRange = env.TRUSTED_PROXY_CIDR?.trim()
   if (proxyRange) ipaddr.parseCIDR(proxyRange)
+  const warning = Number(env.MATERIAL_SIMILARITY_WARNING || defaultThresholds.warning)
+  const high = Number(env.MATERIAL_SIMILARITY_HIGH || defaultThresholds.high)
+  if (!(warning >= 0.5 && warning < high && high <= 1)) {
+    throw new Error("Material similarity thresholds must satisfy 0.5 <= warning < high <= 1")
+  }
   return {
     appUrl,
     sessionSecret: sessionSecret ?? randomBytes(32),
     trustProxy: proxyRange || (false as const),
     databasePath: env.DATABASE_PATH || "./data/rawmat.sqlite",
     turnstile: siteKey && secretKey ? { siteKey, secretKey } : undefined,
+    similarityThresholds: { warning, high },
   }
 }

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, test } from "vitest"
 import { buildApp } from "../src/app.js"
 import { readServerConfig } from "../src/config.js"
 import { openDatabase } from "../src/db/database.js"
-import { auditLog, users } from "../src/db/schema.js"
+import { auditLog, materials, users } from "../src/db/schema.js"
 import { hashPassword } from "../src/modules/auth/passwords.js"
 import { can } from "../src/modules/auth/permissions.js"
 
@@ -79,7 +79,7 @@ test("grants purchase approvals to the intended roles and keeps management restr
 
 test("returns only name and navigation for each role and withholds management routes", async () => {
   expect((await get("/api/me", manager)).json()).toEqual({
-    name: accountName, navigation: ["account", "materials", "accounts", "branches", "references"],
+    name: accountName, navigation: ["account", "materials", "accounts", "branches", "references", "audit"],
   })
   expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account", "materials"] })
   expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["account", "materials"] })
@@ -195,7 +195,7 @@ test("creates, edits, searches, archives and restores materials with the intende
   expect((await write("/api/materials", admin, { ...payload, name: "ملح تجريبي", minimumQuantity: 8 })).statusCode).toBe(204)
 
   const list = (await get("/api/materials?sort=minimum&direction=desc", basic)).json()
-  expect(list.actions).toEqual({ create: true, edit: false, archive: false })
+  expect(list.actions).toEqual({ create: true, edit: false, archive: false, overrideSimilarity: false })
   expect(list.items.map((item: { minimumQuantity: number }) => item.minimumQuantity)).toEqual([8, 2.5])
   const { id, code } = list.items[1]
   expect(code).toMatch(/^MAT-[0-9A-F]+$/)
@@ -215,4 +215,53 @@ test("creates, edits, searches, archives and restores materials with the intende
   expect((await get("/api/materials", basic)).json().total).toBe(2)
   expect(database.db.select().from(auditLog).all().slice(-3).map((item) => item.action))
     .toEqual(["material_updated", "material_archived", "material_restored"])
+})
+
+test("enforces normalized duplicates and confirmation, imports CSV, and preserves merge history", async () => {
+  const categoryId = (await get("/api/catalogue/categories", basic)).json().items[0].id
+  const unitId = (await get("/api/catalogue/units", basic)).json().items[0].id
+  const input = { categoryId, unitId, supplierId: null, minimumQuantity: 0, notes: "", name: "حمض الستريك" }
+  expect((await write("/api/materials", basic, input)).statusCode).toBe(204)
+  const duplicate = await write("/api/materials", admin, { ...input, name: "حَمْض السِّتريك", confirmSimilarity: true })
+  expect(duplicate.statusCode).toBe(409)
+  expect(duplicate.json().similarity.level).toBe("exact")
+  const sourceId = duplicate.json().similarity.matches[0].id
+  expect((await write("/api/materials", basic, { ...input, name: "حامض ستريك" })).json().similarity.level).toBe("warning")
+  expect((await write("/api/materials", basic, { ...input, name: "ستريك حمض", confirmSimilarity: true }))
+    .json().similarity.level).toBe("high")
+  expect((await write("/api/materials", admin, { ...input, name: "ستريك حمض", confirmSimilarity: true })).statusCode).toBe(204)
+  const sameName = database.db.select().from(materials).all().find((item) => item.id === sourceId)!
+  expect(() => database.db.insert(materials).values({
+    ...sameName, id: randomUUID(), code: "MAT-DUPLICATE",
+  }).run()).toThrow()
+
+  const csv = "\uFEFFname,category,unit,supplier,minimumQuantity,notes\r\n" +
+    'ورق تغليف,مساحيق,كغ,,2.5,"سطر أول\nسطر ثان"\r\n' +
+    "حمض الستريك,مساحيق,كغ,,1,\r\n" +
+    "عبوة زجاجية,غير موجود,كغ,,1,\r\n" +
+    "ورق تغليف,مساحيق,كغ,,3,\r\n"
+  const upload = (mode: "preview" | "save", payload = csv) => app.inject({
+    method: "POST", url: `/api/materials/import?mode=${mode}`,
+    headers: { ...headers, cookie: basic, "content-type": "text/csv" }, payload,
+  })
+  const before = database.db.select().from(materials).all().length
+  expect((await upload("preview")).json()).toMatchObject({ accepted: 1, skipped: 3 })
+  expect(database.db.select().from(materials).all()).toHaveLength(before)
+  expect((await upload("save")).json()).toMatchObject({ accepted: 1, skipped: 3 })
+  expect((await upload("save")).json()).toMatchObject({ accepted: 0, skipped: 4 })
+  expect((await upload("preview", "bad,header\n1,2")).statusCode).toBe(400)
+  expect((await upload("preview", csv.split("\r\n")[0] + "\r\n" +
+    "شمع,مساحيق,كغ,,1,\r\n".repeat(5_001))).statusCode).toBe(400)
+
+  const targetId = (await get("/api/materials?search=" + encodeURIComponent("ستريك حمض"), manager)).json().items[0].id
+  expect((await write(`/api/materials/${sourceId}/merge`, admin, { targetId }, "PUT")).statusCode).toBe(404)
+  expect((await write(`/api/materials/${sourceId}/merge`, manager, { targetId: sourceId }, "PUT")).statusCode).toBe(409)
+  expect((await write(`/api/materials/${sourceId}/merge`, manager, { targetId }, "PUT")).statusCode).toBe(204)
+  expect((await write(`/api/materials/${sourceId}/archive`, manager, { archived: false }, "PUT")).statusCode).toBe(409)
+  expect((await get(`/api/materials?id=${sourceId}&status=all`, basic)).json().items[0])
+    .toMatchObject({ archived: true, mergedIntoId: targetId })
+  expect((await get("/api/manage/audit", admin)).statusCode).toBe(404)
+  const audit = (await get("/api/manage/audit?search=materials_merged", manager)).json()
+  expect(audit.items[0]).toMatchObject({ actorName: accountName, entityId: sourceId, after: { mergedIntoId: targetId } })
+  expect(() => database.db.delete(auditLog).run()).toThrow()
 })

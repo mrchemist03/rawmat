@@ -9,6 +9,7 @@ import type { AppDatabase } from "../../db/database.js"
 import { hashPassword, verifyPassword } from "./passwords.js"
 import { createAuthRepository, idleTimeout } from "./repository.js"
 import { verifyTurnstile } from "./turnstile.js"
+import type { SimilarityThresholds } from "../catalogue/similarity.js"
 
 type AuthConfig = Pick<ReturnType<typeof readServerConfig>, "appUrl" | "sessionSecret" | "turnstile">
 export type AuthOptions = {
@@ -16,6 +17,7 @@ export type AuthOptions = {
   db: AppDatabase
   now?: () => number
   verifyChallenge?: typeof verifyTurnstile
+  similarityThresholds?: SimilarityThresholds
 }
 
 const sessionCookie = "__Host-rawmat"
@@ -169,6 +171,16 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions) {
     reserveManagementWrite(actorId: string, request: FastifyRequest) {
       return repository.reserveLoginAttempt(
         keyed("management-actor", actorId), keyed("management-address", clientAddress(request)), now(), 60,
+      )
+    },
+    reserveSimilarityCheck(actorId: string, request: FastifyRequest) {
+      return repository.reserveLoginAttempt(
+        keyed("similarity-actor", actorId), keyed("similarity-address", clientAddress(request)), now(), 60, 60_000,
+      )
+    },
+    reserveImport(actorId: string, request: FastifyRequest) {
+      return repository.reserveLoginAttempt(
+        keyed("import-actor", actorId), keyed("import-address", clientAddress(request)), now(), 6,
       )
     },
     async hashTemporaryPassword(password: string) {

@@ -15,9 +15,12 @@ type BranchInput = { name: string; city: string; active?: boolean }
 type WriteResult = "saved" | "missing" | "duplicate" | "invalid_branch" | "protected_account"
 
 export function createManagementRepository(db: AppDatabase, now: () => number) {
-  function audit(tx: Pick<AppDatabase, "insert">, actorId: string, action: string, entity: string, entityId: string) {
-    tx.insert(auditLog).values({ id: randomUUID(), actorId, action, entity, entityId, occurredAt: now() }).run()
+  function audit(tx: Pick<AppDatabase, "insert">, actorId: string, action: string, entity: string, entityId: string,
+    before: typeof auditLog.$inferInsert.before, after: typeof auditLog.$inferInsert.after) {
+    tx.insert(auditLog).values({ id: randomUUID(), actorId, action, entity, entityId, occurredAt: now(), before, after }).run()
   }
+
+  const accountSnapshot = { name: users.name, loginName: users.loginName, branchId: users.branchId, active: users.active }
 
   return {
     listAccounts(actorId: string, search: string, limit: number, offset: number) {
@@ -42,7 +45,7 @@ export function createManagementRepository(db: AppDatabase, now: () => number) {
 
     saveAccount(actorId: string, input: AccountInput, passwordHash: string | undefined, id?: string): WriteResult {
       return db.transaction((tx) => {
-        const existing = id ? tx.select({ branchId: users.branchId }).from(users).where(eq(users.id, id)).get() : undefined
+        const existing = id ? tx.select(accountSnapshot).from(users).where(eq(users.id, id)).get() : undefined
         if (id && !existing) return "missing"
         if (id === actorId && (input.active === false || input.accountType || passwordHash)) return "protected_account"
         const loginMatch = tx.select({ id: users.id }).from(users).where(eq(users.loginName, input.loginName)).get()
@@ -59,12 +62,15 @@ export function createManagementRepository(db: AppDatabase, now: () => number) {
             ...fields, active: input.active, role: input.accountType,
             passwordHash, mustChangePassword: passwordHash ? true : undefined,
           }).where(eq(users.id, id)).run()
-          audit(tx, actorId, "account_updated", "user", id)
+          audit(tx, actorId, "account_updated", "user", id, existing, {
+            ...fields, active: input.active ?? existing?.active ?? true,
+            permissionsUpdated: Boolean(input.accountType), passwordReset: Boolean(passwordHash),
+          })
         } else {
           if (!passwordHash || !input.accountType) throw new Error("Incomplete account creation")
           const accountId = randomUUID()
           tx.insert(users).values({ ...fields, id: accountId, role: input.accountType, passwordHash }).run()
-          audit(tx, actorId, "account_created", "user", accountId)
+          audit(tx, actorId, "account_created", "user", accountId, undefined, fields)
         }
         return "saved"
       }, { behavior: "immediate" })
@@ -72,13 +78,16 @@ export function createManagementRepository(db: AppDatabase, now: () => number) {
 
     saveBranch(actorId: string, input: BranchInput, id?: string): WriteResult {
       return db.transaction((tx) => {
-        if (id && !tx.select({ id: branches.id }).from(branches).where(eq(branches.id, id)).get()) return "missing"
+        const original = id ? tx.select({ name: branches.name, city: branches.city, active: branches.active })
+          .from(branches).where(eq(branches.id, id)).get() : undefined
+        if (id && !original) return "missing"
         const duplicateFilter = id ? and(eq(branches.name, input.name), ne(branches.id, id)) : eq(branches.name, input.name)
         if (tx.select({ id: branches.id }).from(branches).where(duplicateFilter).get()) return "duplicate"
         const branchId = id ?? randomUUID()
         if (id) tx.update(branches).set(input).where(eq(branches.id, id)).run()
         else tx.insert(branches).values({ ...input, id: branchId }).run()
-        audit(tx, actorId, id ? "branch_updated" : "branch_created", "branch", branchId)
+        audit(tx, actorId, id ? "branch_updated" : "branch_created", "branch", branchId, original,
+          { name: input.name, city: input.city, active: input.active ?? true })
         return "saved"
       }, { behavior: "immediate" })
     },

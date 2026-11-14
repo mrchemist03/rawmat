@@ -10,6 +10,7 @@ try {
   const webRoot = fileURLToPath(new URL("../../web/dist/", import.meta.url))
   const app = buildApp(config.appUrl, webRoot, true, {
     config, db: database.db, trustProxy: config.trustProxy,
+    similarityThresholds: config.similarityThresholds,
     brandingRoot: process.env.BRANDING_PATH || "./deploy/branding",
   })
   app.addHook("onClose", async () => database.close())

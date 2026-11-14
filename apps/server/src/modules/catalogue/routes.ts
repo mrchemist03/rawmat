@@ -1,5 +1,6 @@
 import {
-  listQuerySchema, lookupKindSchema, materialInputSchema, materialListSchema, materialQuerySchema,
+  csvLimit, importQuerySchema, importReportSchema, listQuerySchema, lookupKindSchema, materialListSchema, materialQuerySchema,
+  materialWriteSchema, mergeMaterialSchema, similarityCheckSchema, similarityReportSchema,
   referenceInputSchema, referenceListSchema, supplierInputSchema, supplierListSchema,
 } from "@rawmat/shared"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
@@ -7,6 +8,8 @@ import { z } from "zod"
 import { can } from "../auth/permissions.js"
 import type { AuthAccess, AuthOptions } from "../auth/routes.js"
 import { createCatalogueRepository } from "./repository.js"
+import { readMaterialsCsv } from "./csv.js"
+import { defaultThresholds } from "./similarity.js"
 
 const idParams = z.strictObject({ id: z.uuid() })
 const archiveInput = z.strictObject({ archived: z.boolean() })
@@ -14,7 +17,8 @@ const referenceParams = z.strictObject({ kind: lookupKindSchema, id: z.uuid().op
 type Permission = Parameters<typeof can>[1]
 
 export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, options: AuthOptions) {
-  const repository = createCatalogueRepository(options.db, options.now ?? Date.now)
+  const repository = createCatalogueRepository(options.db, options.now ?? Date.now, options.similarityThresholds ?? defaultThresholds)
+  app.addContentTypeParser("text/csv", { parseAs: "buffer", bodyLimit: csvLimit }, (_request, body, done) => done(null, body))
 
   function authorize(request: FastifyRequest, reply: FastifyReply, capability: Permission, write = false) {
     const principal = auth.principal(request)
@@ -34,12 +38,14 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
     return current
   }
 
-  function finish(reply: FastifyReply, result: "saved" | "missing" | "duplicate" | "invalid_reference") {
+  function finish(reply: FastifyReply, result: "saved" | "missing" | "duplicate" | "invalid_reference" | "invalid_name" | "invalid_merge") {
     switch (result) {
       case "saved": return reply.code(204).send()
       case "missing": return reply.code(404).send({ error: "not_found" })
       case "duplicate": return reply.code(409).send({ error: "duplicate" })
       case "invalid_reference": return reply.code(400).send({ error: result })
+      case "invalid_name": return reply.code(400).send({ error: result })
+      case "invalid_merge": return reply.code(409).send({ error: result })
     }
   }
 
@@ -57,8 +63,24 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
         create: can(principal.role, "createOperations"),
         edit: can(principal.role, "manageRecords"),
         archive: can(principal.role, "manageRecords"),
+        overrideSimilarity: can(principal.role, "overrideSimilarity"),
       },
     }
+  })
+
+  app.get("/api/materials/similarity", {
+    schema: { response: { 200: z.toJSONSchema(similarityReportSchema), 400: inputError, 404: inputError, 429: inputError } },
+  }, async (request, reply) => {
+    const principal = authorize(request, reply, "viewWorkspace")
+    if (!principal) return
+    const query = similarityCheckSchema.safeParse(request.query)
+    if (!query.success) return reply.code(400).send({ error: "invalid_input" })
+    if (!auth.reserveSimilarityCheck(principal.id, request)) {
+      return reply.header("Retry-After", "60").code(429).send({ error: "rate_limited" })
+    }
+    const { name, unitId, exclude } = query.data
+    const report = repository.checkSimilarity(name, unitId, exclude)
+    return report ?? reply.code(400).send({ error: "invalid_name" })
   })
 
   async function writeMaterial(request: FastifyRequest, reply: FastifyReply, updating: boolean) {
@@ -66,13 +88,50 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
     if (!principal) return
     const id = updating ? idParams.safeParse(request.params) : undefined
     if (id && !id.success) return finish(reply, "missing")
-    const input = materialInputSchema.safeParse(request.body)
+    const input = materialWriteSchema.safeParse(request.body)
     if (!input.success) return reply.code(400).send({ error: "invalid_input" })
-    return finish(reply, repository.saveMaterial(principal.id, input.data, id?.data.id))
+    const { confirmSimilarity, ...fields } = input.data
+    const result = repository.saveMaterial(principal.id, fields, {
+      confirm: confirmSimilarity, canOverride: can(principal.role, "overrideSimilarity"),
+    }, id?.data.id)
+    return typeof result === "string" ? finish(reply, result) :
+      reply.code(409).send({ error: "similarity", similarity: similarityReportSchema.parse(result.similarity) })
   }
 
   app.post("/api/materials", { bodyLimit: 16_384 }, (request, reply) => writeMaterial(request, reply, false))
   app.put("/api/materials/:id", { bodyLimit: 16_384 }, (request, reply) => writeMaterial(request, reply, true))
+  app.post("/api/materials/import", {
+    bodyLimit: csvLimit,
+    onRequest: async (request, reply) => {
+      const principal = auth.principal(request)
+      if (!principal || principal.mustChangePassword || !can(principal.role, "createOperations")) {
+        return reply.code(404).send({ error: "not_found" })
+      }
+      if (!auth.reserveImport(principal.id, request)) {
+        return reply.header("Retry-After", "900").code(429).send({ error: "rate_limited" })
+      }
+    },
+  }, async (request, reply) => {
+    const principal = authorize(request, reply, "createOperations", true)
+    if (!principal) return
+    const query = importQuerySchema.safeParse(request.query)
+    if (!query.success || !Buffer.isBuffer(request.body)) return reply.code(400).send({ error: "invalid_csv" })
+    const rows = readMaterialsCsv(request.body)
+    if (!rows) return reply.code(400).send({ error: "invalid_csv" })
+    const result = repository.importMaterials(principal.id, rows, {
+      confirm: query.data.confirmSimilarity === "true", canOverride: can(principal.role, "overrideSimilarity"),
+    }, query.data.mode === "preview")
+    return importReportSchema.parse(result)
+  })
+  app.put("/api/materials/:id/merge", { bodyLimit: 1_024 }, async (request, reply) => {
+    const principal = authorize(request, reply, "manageRecords", true)
+    if (!principal) return
+    const id = idParams.safeParse(request.params)
+    if (!id.success) return finish(reply, "missing")
+    const input = mergeMaterialSchema.safeParse(request.body)
+    if (!input.success) return reply.code(400).send({ error: "invalid_input" })
+    return finish(reply, repository.mergeMaterials(principal.id, id.data.id, input.data.targetId))
+  })
   app.put("/api/materials/:id/archive", { bodyLimit: 1_024 }, async (request, reply) => {
     const principal = authorize(request, reply, "manageRecords", true)
     if (!principal) return

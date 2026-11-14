@@ -1,11 +1,12 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import {
-  materialInputSchema, materialListSchema, materialSortSchema, materialStatusSchema, pageSize,
+  materialInputSchema, materialListSchema, materialSortSchema, materialStatusSchema, pageSize, similarityReportSchema,
   referenceInputSchema, referenceListSchema, supplierInputSchema, supplierListSchema,
 } from "@rawmat/shared"
-import type { LookupKind, MaterialView, ReferenceOption, SupplierInput } from "@rawmat/shared"
+import type { LookupKind, MaterialView, ReferenceOption, SimilarityReport, SupplierInput } from "@rawmat/shared"
 import { EditorActions, Listing, useCollection, useEditor } from "./management"
+import { MaterialImport, matchLabel } from "./material-import"
 
 const materialPath = "/api/materials"
 const invalid = "تحقّق من الحقول المطلوبة والحد الأدنى."
@@ -15,8 +16,8 @@ const referenceNames: Record<LookupKind, string> = {
 const sortLabels = { name: "الاسم", code: "الرمز", category: "الفئة", minimum: "الحد الأدنى" }
 const numberFormat = new Intl.NumberFormat("ar-u-nu-latn", { maximumFractionDigits: 12 })
 
-function ReferenceField({ kind, label, initial, optional = false }: {
-  kind: LookupKind; label: string; initial?: ReferenceOption; optional?: boolean
+function ReferenceField({ kind, label, initial, optional = false, onSelect }: {
+  kind: LookupKind; label: string; initial?: ReferenceOption; optional?: boolean; onSelect?: (value: string) => void
 }) {
   const data = useCollection(`/api/catalogue/${kind}`, referenceListSchema)
   const [selected, setSelected] = useState(initial)
@@ -27,6 +28,7 @@ function ReferenceField({ kind, label, initial, optional = false }: {
     <div className="branch-field">
       <label>{label}
         <select name={kind} required={!optional} value={selected?.id ?? ""} onChange={(event) => {
+          onSelect?.(event.target.value)
           setSelected(options.find((option) => option.id === event.target.value) ??
             (event.target.value === selected?.id ? selected : undefined))
         }}>
@@ -51,8 +53,46 @@ function ReferenceField({ kind, label, initial, optional = false }: {
   )
 }
 
-function MaterialEditor({ item, onClose, onSaved }: { item: MaterialView | null; onClose: () => void; onSaved: () => void }) {
-  const editor = useEditor(materialPath, item?.id, onSaved)
+function materialLink(id: string) {
+  return `/materials?id=${encodeURIComponent(id)}`
+}
+
+function MaterialEditor({ item, canOverride, onClose, onSaved }: {
+  item: MaterialView | null; canOverride: boolean; onClose: () => void; onSaved: () => void
+}) {
+  const [name, setName] = useState(item?.name ?? "")
+  const [unitId, setUnitId] = useState(item?.unitId ?? "")
+  const [report, setReport] = useState<SimilarityReport>()
+  const [confirmed, setConfirmed] = useState(false)
+  const editor = useEditor(materialPath, item?.id, onSaved, async (response) => {
+    const body = response.status === 409 ? await response.json().catch(() => null) : null
+    const result = similarityReportSchema.safeParse(body?.similarity)
+    if (!result.success) return false
+    setReport(result.data)
+    setConfirmed(false)
+    return true
+  })
+  useEffect(() => {
+    setReport(undefined)
+    setConfirmed(false)
+    if (!name.trim() || !unitId || (name === item?.name && unitId === item.unitId)) return
+    const abort = new AbortController()
+    const timer = window.setTimeout(async () => {
+      const query = new URLSearchParams({ name, unitId })
+      if (item) query.set("exclude", item.id)
+      try {
+        const response = await fetch(`${materialPath}/similarity?${query}`, { signal: abort.signal, cache: "no-store" })
+        if (response.ok) {
+          const result = similarityReportSchema.parse(await response.json())
+          if (!abort.signal.aborted) setReport(result)
+        }
+      } catch {
+        // The submit handler still receives the authoritative result.
+      }
+    }, 300)
+    return () => { window.clearTimeout(timer); abort.abort() }
+  }, [name, unitId, item])
+  const canConfirm = report?.level === "warning" || (report?.level === "high" && canOverride)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
@@ -62,24 +102,55 @@ function MaterialEditor({ item, onClose, onSaved }: { item: MaterialView | null;
       supplierId: values.get("suppliers") || null, minimumQuantity: minimum ? Number(minimum) : NaN, notes: values.get("notes"),
     })
     if (!result.success) return editor.setError(invalid)
-    void editor.save(result.data)
+    void editor.save({ ...result.data, confirmSimilarity: canConfirm && confirmed })
   }
   return (
     <section className="editor" aria-labelledby="material-editor">
       <h2 id="material-editor">{item ? "تعديل المادة" : "إضافة مادة"}</h2>
       <form onSubmit={submit}>
-        <label>اسم المادة<input name="name" maxLength={200} defaultValue={item?.name} required /></label>
+        <label>اسم المادة<input name="name" maxLength={200} value={name} onChange={(event) => setName(event.target.value)} required /></label>
         <ReferenceField kind="categories" label="الفئة" initial={item ? { id: item.categoryId, name: item.categoryName } : undefined} />
-        <ReferenceField kind="units" label="وحدة القياس" initial={item ? { id: item.unitId, name: item.unitName } : undefined} />
+        <ReferenceField kind="units" label="وحدة القياس" onSelect={setUnitId}
+          initial={item ? { id: item.unitId, name: item.unitName } : undefined} />
         <ReferenceField kind="suppliers" label="المورد المفضّل" optional initial={item?.supplierId && item.supplierName
           ? { id: item.supplierId, name: item.supplierName } : undefined} />
         <label>الحد الأدنى<input name="minimumQuantity" type="number" min="0" max="1000000000" step="any"
           defaultValue={item?.minimumQuantity ?? 0} dir="ltr" required /></label>
         <label>ملاحظات<textarea name="notes" rows={3} maxLength={2000} defaultValue={item?.notes} /></label>
-        <EditorActions {...editor} onClose={onClose} />
+        {report && report.level !== "clear" && <div className="import-report" role="status">
+          <strong>{matchLabel[report.level]}</strong>
+          <ul>{report.matches.map((match) => <li key={match.id}>
+            <a href={materialLink(match.id)}>{match.name}</a>{match.archived && " (مؤرشفة)"}
+          </li>)}</ul>
+          {canConfirm && <label className="checkbox"><input type="checkbox" checked={confirmed}
+            onChange={(event) => setConfirmed(event.target.checked)} /> تأكيد حفظ المادة رغم التشابه</label>}
+        </div>}
+        <EditorActions {...editor} busy={editor.busy} blocked={
+          report?.level === "exact" || (report?.level === "high" && !canOverride) || (canConfirm && !confirmed)
+        } onClose={onClose} />
       </form>
     </section>
   )
+}
+
+function MergeEditor({ item, onClose, onSaved }: { item: MaterialView; onClose: () => void; onSaved: () => void }) {
+  const editor = useEditor(`${materialPath}/${item.id}`, "merge", onSaved)
+  const [target, setTarget] = useState("")
+  const data = useCollection(materialPath, materialListSchema)
+  return <section className="editor">
+    <h2>دمج المادة</h2>
+    <p>ستُؤرشف «{item.name}» ويُربط رمزها بالمادة التي تختارها. اختر مادة فعّالة لها وحدة القياس نفسها.</p>
+    <Listing data={data}>
+      <label>المادة التي ستبقى<select value={target} onChange={(event) => setTarget(event.target.value)}>
+        <option value="">اختر مادة</option>
+        {data.result?.items.filter((value) => value.id !== item.id && value.unitId === item.unitId).map((value) =>
+          <option key={value.id} value={value.id}>{value.name} · {value.code}</option>)}
+      </select></label>
+    </Listing>
+    <form onSubmit={(event) => { event.preventDefault(); if (target) void editor.save({ targetId: target }) }}>
+      <EditorActions {...editor} blocked={!target} onClose={onClose} />
+    </form>
+  </section>
 }
 
 function MaterialStatusEditor({ item, onClose, onSaved }: { item: MaterialView; onClose: () => void; onSaved: () => void }) {
@@ -98,16 +169,22 @@ function MaterialStatusEditor({ item, onClose, onSaved }: { item: MaterialView; 
 export function Materials() {
   const [sort, setSort] = useState("name")
   const [direction, setDirection] = useState("asc")
-  const [status, setStatus] = useState("active")
-  const data = useCollection(materialPath, materialListSchema, new URLSearchParams({ sort, direction, status }).toString())
+  const [focus] = useState(() => new URLSearchParams(location.search).get("id"))
+  const [status, setStatus] = useState(focus ? "all" : "active")
+  const query = new URLSearchParams({ sort, direction, status })
+  if (focus) query.set("id", focus)
+  const data = useCollection(materialPath, materialListSchema, query.toString())
   const [editing, setEditing] = useState<MaterialView | null>()
   const [changingStatus, setChangingStatus] = useState<MaterialView>()
+  const [merging, setMerging] = useState<MaterialView>()
+  const [importing, setImporting] = useState(false)
   const [notice, setNotice] = useState("")
   const actions = data.result?.actions
   const showActions = actions?.edit || actions?.archive
   function saved(message: string) {
     setEditing(undefined)
     setChangingStatus(undefined)
+    setMerging(undefined)
     data.setPage(1)
     data.refresh()
     setNotice(message)
@@ -115,10 +192,16 @@ export function Materials() {
   return (
     <section className="surface">
       <div className="section-heading"><h1>المواد الأولية</h1>
-        {actions?.create && <button onClick={() => { setNotice(""); setChangingStatus(undefined); setEditing(null) }}>إضافة مادة</button>}
+        {actions?.create && <div className="actions">
+          <button onClick={() => { setNotice(""); setChangingStatus(undefined); setMerging(undefined); setImporting(false); setEditing(null) }}>إضافة مادة</button>
+          <button className="secondary" onClick={() => { setNotice(""); setChangingStatus(undefined); setMerging(undefined); setEditing(undefined); setImporting(true) }}>استيراد CSV</button>
+        </div>}
       </div>
+      {focus && <p><a href="/materials">عرض كل المواد</a></p>}
       {notice && <p role="status" className="notice">{notice}</p>}
-      {editing !== undefined && <MaterialEditor key={editing?.id ?? "new"} item={editing}
+      {importing && <MaterialImport canOverride={Boolean(actions?.overrideSimilarity)} onClose={() => setImporting(false)} onSaved={data.refresh} />}
+      {merging && <MergeEditor key={merging.id} item={merging} onClose={() => setMerging(undefined)} onSaved={() => saved("تم دمج المادة.")} />}
+      {editing !== undefined && <MaterialEditor key={editing?.id ?? "new"} item={editing} canOverride={Boolean(actions?.overrideSimilarity)}
         onClose={() => setEditing(undefined)} onSaved={() => saved("تم حفظ المادة.")} />}
       {changingStatus && <MaterialStatusEditor key={changingStatus.id} item={changingStatus}
         onClose={() => setChangingStatus(undefined)} onSaved={() => saved(changingStatus.archived ? "تمت استعادة المادة." : "تمت أرشفة المادة.")} />}
@@ -148,12 +231,16 @@ export function Materials() {
             <th scope="row">{item.name}{item.notes && <small className="table-note">{item.notes}</small>}</th>
             <td><bdi className="material-code">{item.code}</bdi></td><td>{item.categoryName}</td><td>{item.unitName}</td>
             <td><bdi>{numberFormat.format(item.minimumQuantity)}</bdi></td><td>{item.supplierName ?? "—"}</td>
-            <td>{item.archived ? "مؤرشفة" : "فعّالة"}</td>
+            <td>{item.mergedIntoId ? <a href={materialLink(item.mergedIntoId)}>دُمجت</a> : item.archived ? "مؤرشفة" : "فعّالة"}</td>
             {showActions && <td><div className="actions">
               {actions?.edit && !item.archived && <button className="secondary compact" aria-label={`تعديل المادة ${item.name}`}
-                onClick={() => { setNotice(""); setChangingStatus(undefined); setEditing(item) }}>تعديل</button>}
-              {actions?.archive && <button className="secondary compact" aria-label={`${item.archived ? "استعادة" : "أرشفة"} المادة ${item.name}`}
-                onClick={() => { setNotice(""); setEditing(undefined); setChangingStatus(item) }}>{item.archived ? "استعادة" : "أرشفة"}</button>}
+                onClick={() => { setNotice(""); setChangingStatus(undefined); setMerging(undefined); setImporting(false); setEditing(item) }}>تعديل</button>}
+              {actions?.archive && !item.mergedIntoId && <>
+                <button className="secondary compact" aria-label={`${item.archived ? "استعادة" : "أرشفة"} المادة ${item.name}`}
+                  onClick={() => { setNotice(""); setEditing(undefined); setMerging(undefined); setImporting(false); setChangingStatus(item) }}>{item.archived ? "استعادة" : "أرشفة"}</button>
+                <button className="secondary compact" aria-label={`دمج المادة ${item.name}`}
+                  onClick={() => { setNotice(""); setEditing(undefined); setChangingStatus(undefined); setImporting(false); setMerging(item) }}>دمج</button>
+              </>}
             </div></td>}
           </tr>)}</tbody>
         </table></div> : <p className="empty">لا توجد مواد مطابقة.</p>}

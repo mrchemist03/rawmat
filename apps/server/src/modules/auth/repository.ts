@@ -32,14 +32,14 @@ export function createAuthRepository(db: AppDatabase) {
         .from(users).where(and(eq(users.loginName, loginName), eq(users.active, true))).get()
     },
 
-    reserveLoginAttempt(accountKey: string, addressKey: string, now: number, limit = loginLimit) {
+    reserveLoginAttempt(accountKey: string, addressKey: string, now: number, limit = loginLimit, window = loginWindow) {
       return db.transaction((tx) => {
-        const cutoff = now - loginWindow
-        tx.delete(loginAttempts).where(lte(loginAttempts.attemptedAt, cutoff)).run()
+        const cutoff = now - window
+        tx.delete(loginAttempts).where(lte(loginAttempts.attemptedAt, now - loginWindow)).run()
         const account = tx.select({ count: count() }).from(loginAttempts)
-          .where(eq(loginAttempts.accountKey, accountKey)).get()
+          .where(and(eq(loginAttempts.accountKey, accountKey), gt(loginAttempts.attemptedAt, cutoff))).get()
         const address = tx.select({ count: count() }).from(loginAttempts)
-          .where(eq(loginAttempts.addressKey, addressKey)).get()
+          .where(and(eq(loginAttempts.addressKey, addressKey), gt(loginAttempts.attemptedAt, cutoff))).get()
         if ((account?.count ?? 0) >= limit || (address?.count ?? 0) >= limit) return false
         tx.insert(loginAttempts).values({ accountKey, addressKey, attemptedAt: now }).run()
         return true

@@ -25,5 +25,6 @@ export function navigationFor(role: AccountType): NavigationItem[] {
   if (can(role, "manageAccounts")) result.push("accounts")
   if (can(role, "manageBranches")) result.push("branches")
   if (can(role, "manageReferenceData")) result.push("references")
+  if (can(role, "viewAudit")) result.push("audit")
   return result
 }

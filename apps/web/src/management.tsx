@@ -66,7 +66,8 @@ export function Listing({ data, children }: { data: ReturnType<typeof useCollect
   )
 }
 
-export function useEditor(path: string, id: string | undefined, onSaved: () => void) {
+export function useEditor(path: string, id: string | undefined, onSaved: () => void,
+  onRejected?: (response: Response) => Promise<boolean>) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   async function save(payload: unknown) {
@@ -75,6 +76,7 @@ export function useEditor(path: string, id: string | undefined, onSaved: () => v
     try {
       const response = await request(id ? `${path}/${id}` : path, payload, id ? "PUT" : "POST")
       if (response.ok) return onSaved()
+      if (onRejected && await onRejected(response.clone())) return
       setError(await rejection(response))
     } catch {
       setError(unavailable)
@@ -85,12 +87,14 @@ export function useEditor(path: string, id: string | undefined, onSaved: () => v
   return { busy, error, setError, save }
 }
 
-export function EditorActions({ busy, error, onClose }: { busy: boolean; error: string; onClose: () => void }) {
+export function EditorActions({ busy, error, onClose, blocked = false }: {
+  busy: boolean; error: string; onClose: () => void; blocked?: boolean
+}) {
   return (
     <>
       {error && <p role="alert" className="error">{error}</p>}
       <div className="actions">
-        <button disabled={busy}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
+        <button disabled={busy || blocked}>{busy ? "جارٍ الحفظ…" : "حفظ"}</button>
         <button className="secondary" type="button" onClick={onClose} disabled={busy}>إلغاء</button>
       </div>
     </>

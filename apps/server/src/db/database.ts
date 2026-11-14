@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite"
 import { fileURLToPath } from "node:url"
 import { drizzle } from "drizzle-orm/node-sqlite"
 import { migrate } from "drizzle-orm/node-sqlite/migrator"
+import { normalizeMaterialName } from "../modules/catalogue/similarity.js"
 
 const migrationsFolder = fileURLToPath(new URL("../../migrations/", import.meta.url))
 
@@ -12,6 +13,8 @@ export function openDatabase(path: string, applyMigrations = true) {
   const client = new DatabaseSync(path, { enableForeignKeyConstraints: true, timeout: 5_000 })
   try {
     client.exec("PRAGMA journal_mode = WAL")
+    client.function("rawmat_normalize_name", { deterministic: true, directOnly: true }, (value) =>
+      typeof value === "string" ? normalizeMaterialName(value) : "")
     const db = drizzle({ client })
     if (applyMigrations) migrate(db, { migrationsFolder })
     return { db, close: () => client.close() }
