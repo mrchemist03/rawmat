@@ -8,6 +8,9 @@
 !apps/server/tsconfig.json
 !apps/server/src/
 !apps/server/src/**/*.ts
+!apps/server/migrations/
+!apps/server/migrations/**/
+!apps/server/migrations/**/migration.sql
 !apps/web/
 !apps/web/package.json
 !apps/web/index.html
@@ -15,6 +18,7 @@
 !apps/web/vite.config.ts
 !apps/web/src/
 !apps/web/src/**/*.tsx
+!apps/web/src/**/*.css
 !packages/
 !packages/shared/
 !packages/shared/package.json

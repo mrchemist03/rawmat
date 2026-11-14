@@ -1,10 +1,8 @@
 import { createRoot } from "react-dom/client"
+import { App } from "./app"
+import "./styles.css"
 
 const container = document.getElementById("root")
 if (!container) throw new Error("Missing application root")
 
-createRoot(container).render(
-  <main>
-    <h1>إدارة المواد الأولية</h1>
-  </main>,
-)
+createRoot(container).render(<App />)

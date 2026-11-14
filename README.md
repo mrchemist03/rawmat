@@ -1,6 +1,6 @@
 # Rawmat
 
-تطبيق ويب داخلي باللغة العربية لإدارة المواد الأولية. تحتوي النسخة الحالية على أساس التطبيق وصفحة عربية باتجاه من اليمين إلى اليسار وفحص صحة للخادم. يخدم Fastify الواجهة المبنية بـ React وVite من حاوية واحدة.
+تطبيق ويب داخلي باللغة العربية لإدارة المواد الأولية. تتضمن النسخة الحالية تسجيل الدخول والخروج وتغيير كلمة المرور عند الدخول لأول مرة. يخدم Fastify واجهة React وVite من حاوية واحدة، وتُحفظ الحسابات والجلسات في SQLite.
 
 ## التشغيل المحلي
 
@@ -10,7 +10,13 @@
 docker compose -f deploy/compose.dev.yml up --build --wait
 ```
 
-افتح [واجهة التطبيق](http://127.0.0.1:8080/). يستمع إعداد التطوير على عنوان الحلقة المحلية فقط. للتحقق من صحة الخادم افتح [مسار الصحة](http://127.0.0.1:8080/healthz)، الذي يعيد `{"status":"ok"}`.
+بعد أن تصبح الحاوية سليمة، أنشئ الحساب الأول مرة واحدة. يستقبل الأمر كلمة المرور المؤقتة بإدخال مخفي ويطلب تأكيدها. استخدم كلمة مرور من 12 حرفًا على الأقل.
+
+```sh
+docker compose -f deploy/compose.dev.yml exec app /nodejs/bin/node apps/server/dist/cli/create-superuser.js first-user "مسؤول النظام"
+```
+
+افتح [واجهة التطبيق](http://127.0.0.1:8080/) وسجّل الدخول، ثم عيّن كلمة مرور جديدة. يستمع إعداد التطوير على عنوان الحلقة المحلية فقط، ويمكن ضبط `LOCAL_PORT` إذا كان المنفذ مشغولًا. يعيد [مسار الصحة](http://127.0.0.1:8080/healthz) القيمة `{"status":"ok"}`.
 
 ```sh
 docker compose -f deploy/compose.dev.yml down
@@ -31,6 +37,7 @@ npm test
 | المسار | المحتوى |
 | --- | --- |
 | [apps/server](apps/server) | خادم Fastify واختبارات API |
+| [apps/server/migrations](apps/server/migrations) | ترحيلات SQLite المطبقة عند بدء التشغيل |
 | [apps/web](apps/web) | واجهة React وتهيئة Vite |
 | [packages/shared](packages/shared) | مخططات التحقق المشتركة باستخدام Zod |
 | [deploy](deploy) | إعدادات التشغيل بالحاوية |
@@ -39,13 +46,22 @@ npm test
 
 ## تشغيل الحاوية خلف وكيل عكسي
 
-ابنِ صورة محلية بالأمر `docker build -t rawmat:local .`. انسخ [ملف البيئة النموذجي](deploy/.env.example) إلى `deploy/.env` واضبط `APP_IMAGE` على `rawmat:local`، و`EDGE_NETWORK` على شبكة Docker الموجودة للوكيل، و`APP_URL` على عنوان HTTPS العام. يوجّه الوكيل الطلبات إلى `rawmat-web:8080` عند استخدام اسم المشروع الافتراضي، مع تمرير ترويسة `Host` الأصلية.
+ابنِ صورة محلية بالأمر `docker build -t rawmat:local .`. انسخ [ملف البيئة النموذجي](deploy/.env.example) إلى `deploy/.env` واضبط `APP_IMAGE` على `rawmat:local`، و`EDGE_NETWORK` على شبكة Docker الموجودة للوكيل، و`APP_URL` على عنوان HTTPS العام.
+
+ولّد سرًا ثابتًا لـ `SESSION_SECRET` باستخدام مولّد كلمات مرور أو الأمر التالي، واحفظ القيمة في ملف البيئة على الخادم.
+
+```sh
+node -p "require('node:crypto').randomBytes(32).toString('hex')"
+```
+
+يوجّه الوكيل الطلبات إلى `rawmat-web:8080` عند استخدام اسم المشروع الافتراضي، مع تمرير ترويسة `Host` الأصلية. اضبط `TRUSTED_PROXY_CIDR` على عنوان الوكيل بنطاق ضيق ليستخدم الخادم عنوان العميل في تقييد المحاولات. على الوكيل تعيين `X-Forwarded-For` من عنوان الاتصال الفعلي.
 
 ```sh
 docker compose --env-file deploy/.env -f deploy/compose.yml up -d --wait
+docker compose --env-file deploy/.env -f deploy/compose.yml exec app /nodejs/bin/node apps/server/dist/cli/create-superuser.js first-user "مسؤول النظام"
 ```
 
-إعداد الخادم مخصص حاليًا للتحقق من البنية. اقتصِر في الوصول إليه على بيئة داخلية أو اختبارية إلى حين توفر تسجيل الدخول.
+لتفعيل Turnstile، اضبط `TURNSTILE_SITE_KEY` و`TURNSTILE_SECRET_KEY` معًا. طابق النطاق المسموح في Cloudflare مع نطاق `APP_URL` وأعد تشغيل الحاوية بعد تعديل الإعدادات. يبقى مزوّد التحقق اختياريًا ما دام المفتاحان فارغين.
 
 ## الأمان
 

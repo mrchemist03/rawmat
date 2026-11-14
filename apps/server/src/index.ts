@@ -1,11 +1,17 @@
 import { fileURLToPath } from "node:url"
 import { buildApp } from "./app.js"
-import { port, readAppUrl } from "./config.js"
+import { port, readServerConfig } from "./config.js"
+import { openDatabase } from "./db/database.js"
 
 try {
-  const appUrl = readAppUrl(process.env.APP_URL)
+  process.umask(0o077)
+  const config = readServerConfig(process.env)
+  const database = openDatabase(config.databasePath)
   const webRoot = fileURLToPath(new URL("../../web/dist/", import.meta.url))
-  const app = buildApp(appUrl, webRoot)
+  const app = buildApp(config.appUrl, webRoot, true, {
+    config, db: database.db, trustProxy: config.trustProxy,
+  })
+  app.addHook("onClose", async () => database.close())
   const shutdown = () => {
     app.close().catch(() => {
       app.log.error("server shutdown failed")
@@ -19,7 +25,7 @@ try {
 } catch {
   console.error(JSON.stringify({
     level: "error",
-    message: "Server startup failed. Verify APP_URL and port 8080.",
+    message: "Server startup failed. Verify runtime settings, database access and port 8080.",
   }))
   process.exitCode = 1
 }

@@ -4,6 +4,9 @@ import { healthResponseSchema } from "@rawmat/shared"
 import Fastify, { LogController } from "fastify"
 import { z } from "zod"
 import { healthHost } from "./config.js"
+import { registerAuth } from "./modules/auth/routes.js"
+import type { AuthOptions } from "./modules/auth/routes.js"
+import { challengeOrigin } from "./modules/auth/turnstile.js"
 
 const csp = [
   "default-src 'none'",
@@ -21,12 +24,17 @@ const csp = [
 const safeMethods = new Set(["GET", "HEAD", "OPTIONS"])
 const loopbackAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"])
 
-export function buildApp(appUrl: URL, webRoot: string, logger = true) {
+export function buildApp(
+  appUrl: URL,
+  webRoot: string,
+  logger = true,
+  auth?: AuthOptions & { trustProxy: string | false },
+) {
   const app = Fastify({
     logger,
     logController: new LogController({ disableRequestLogging: true }),
     requestIdHeader: false,
-    trustProxy: false,
+    trustProxy: auth?.trustProxy ?? false,
     bodyLimit: 1024 * 1024,
     requestTimeout: 30_000,
   })
@@ -84,9 +92,25 @@ export function buildApp(appUrl: URL, webRoot: string, logger = true) {
     cacheControl: false,
   })
 
-  app.get("/", async (_request, reply) => {
-    return reply.sendFile("index.html", webRoot, { cacheControl: false })
-  })
+  if (auth) {
+    app.register(async (scope) => {
+      const { hasSession } = await registerAuth(scope, auth)
+      scope.get("/", async (request, reply) => {
+        if (!hasSession(request)) return reply.redirect("/login")
+        return reply.sendFile("index.html", webRoot, { cacheControl: false })
+      })
+      scope.get("/login", async (request, reply) => {
+        if (hasSession(request)) return reply.redirect("/")
+        if (auth.config.turnstile) {
+          const loginCsp = csp.replace("script-src 'self'", `script-src 'self' ${challengeOrigin}`)
+          reply.header("Content-Security-Policy", `${loginCsp}; frame-src ${challengeOrigin}`)
+        }
+        return reply.sendFile("index.html", webRoot, { cacheControl: false })
+      })
+    })
+  } else {
+    app.get("/", async (_request, reply) => reply.sendFile("index.html", webRoot, { cacheControl: false }))
+  }
 
   return app
 }
