@@ -1,4 +1,4 @@
-FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS build
+FROM node:25-trixie-slim@sha256:aabbe39553d15ede8a97cc60c9e1a97034ff772afcf696ea42b94e7f5f2ec71b AS build
 WORKDIR /app
 
 COPY package.json package-lock.json tsconfig.base.json ./
