@@ -1,0 +1,159 @@
+import { randomUUID } from "node:crypto"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { crc32 } from "node:zlib"
+import { afterAll, beforeAll, expect, test } from "vitest"
+import { buildApp } from "../src/app.js"
+import { readServerConfig } from "../src/config.js"
+import { openDatabase } from "../src/db/database.js"
+import { auditLog, users } from "../src/db/schema.js"
+import { hashPassword } from "../src/modules/auth/passwords.js"
+import { can } from "../src/modules/auth/permissions.js"
+
+const origin = "https://rawmat.example.invalid"
+const headers = { host: "rawmat.example.invalid", origin }
+const fixturePassword = "workspace fixture password"
+const accountName = "حساب إدارة تجريبي"
+const png = new URL("../../web/public/rawmat-logo.png", import.meta.url)
+const database = openDatabase(":memory:")
+let root: string
+let app: ReturnType<typeof buildApp>
+let manager = ""
+let admin = ""
+let basic = ""
+const ids = { manager: randomUUID(), admin: randomUUID(), basic: randomUUID(), pending: randomUUID() }
+
+async function login(loginName: string, remoteAddress: string, password = fixturePassword) {
+  const response = await app.inject({
+    method: "POST", url: "/api/auth/login", headers, remoteAddress, payload: { loginName, password },
+  })
+  expect(response.statusCode).toBe(200)
+  expect(response.json()).not.toHaveProperty("role")
+  return String(response.headers["set-cookie"]).split(";")[0]!
+}
+
+function get(url: string, cookie?: string) {
+  return app.inject({ url, headers: cookie ? { ...headers, cookie } : headers })
+}
+
+function write(url: string, cookie: string, payload: Record<string, unknown>, method: "POST" | "PUT" = "POST") {
+  return app.inject({ method, url, headers: { ...headers, cookie }, payload })
+}
+
+beforeAll(async () => {
+  root = await mkdtemp(join(tmpdir(), "rawmat-management-"))
+  await mkdir(join(root, "assets"))
+  await mkdir(join(root, "branding"))
+  await writeFile(join(root, "index.html"), "<html></html>")
+  await writeFile(join(root, "rawmat-logo.png"), await readFile(png))
+  const passwordHash = await hashPassword(fixturePassword)
+  database.db.insert(users).values([
+    { id: ids.manager, name: accountName, loginName: "manager.fixture", role: "superuser", passwordHash, mustChangePassword: false },
+    { id: ids.admin, name: "Admin fixture", loginName: "admin.fixture", role: "admin", passwordHash, mustChangePassword: false },
+    { id: ids.basic, name: "Basic fixture", loginName: "basic.fixture", role: "user", passwordHash, mustChangePassword: false },
+    { id: ids.pending, name: "Pending fixture", loginName: "pending.fixture", role: "superuser", passwordHash },
+  ]).run()
+  const config = readServerConfig({ APP_URL: origin })
+  app = buildApp(config.appUrl, root, false, {
+    config, db: database.db, trustProxy: false, brandingRoot: join(root, "branding"),
+  })
+  manager = await login("manager.fixture", "192.0.2.1")
+  admin = await login("admin.fixture", "192.0.2.2")
+  basic = await login("basic.fixture", "192.0.2.3")
+}, 15_000)
+
+afterAll(async () => {
+  await app?.close()
+  database.close()
+  if (root) await rm(root, { recursive: true, force: true })
+})
+
+test("grants purchase approvals to the intended roles and keeps management restricted", () => {
+  expect(can("user", "viewCosts")).toBe(false)
+  expect(can("admin", "viewCosts")).toBe(true)
+  expect(can("admin", "approvePurchases")).toBe(true)
+  expect(can("admin", "manageAccounts")).toBe(false)
+  expect(can("superuser", "manageAccounts")).toBe(true)
+})
+
+test("returns only name and navigation for each role and withholds management routes", async () => {
+  expect((await get("/api/me", manager)).json()).toEqual({ name: accountName, navigation: ["account", "accounts", "branches"] })
+  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account"] })
+  expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["account"] })
+  expect((await get("/api/me")).statusCode).toBe(401)
+  for (const cookie of [undefined, admin, basic]) {
+    for (const path of ["/accounts", "/branches", "/api/manage/accounts", "/api/manage/branches"]) {
+      expect((await get(path, cookie)).statusCode).toBe(404)
+    }
+  }
+  const pending = await login("pending.fixture", "192.0.2.4")
+  expect((await get("/api/me", pending)).statusCode).toBe(403)
+  expect((await get("/api/manage/accounts", pending)).statusCode).toBe(404)
+  expect((await write("/api/manage/branches", basic, { name: "Test", city: "Test" })).statusCode).toBe(404)
+})
+
+test("manages accounts and branches, revokes altered sessions and audits writes", async () => {
+  const branch = { name: "الشعبة التجريبية", city: "المدينة التجريبية" }
+  expect((await write("/api/manage/branches", manager, branch)).statusCode).toBe(204)
+  expect((await write("/api/manage/branches", manager, branch)).statusCode).toBe(409)
+  const branchList = (await get("/api/manage/branches?search=" + encodeURIComponent(branch.name), manager)).json()
+  expect(branchList.total).toBe(1)
+  const branchId = branchList.items[0].id
+
+  const account = { name: "اسم تجريبي", loginName: "Managed.Fixture", branchId }
+  const temporaryPassword = "temporary password fixture"
+  expect((await write("/api/manage/accounts", manager, {
+    ...account, accountType: "admin", temporaryPassword,
+  })).statusCode).toBe(204)
+  expect((await write("/api/manage/accounts", manager, {
+    ...account, accountType: "user", temporaryPassword,
+  })).statusCode).toBe(409)
+  const accountList = (await get("/api/manage/accounts?search=managed.fixture", manager)).json()
+  const id = accountList.items[0].id
+  expect(accountList.items[0]).toEqual({
+    id, name: account.name, loginName: "managed.fixture", branchName: branch.name, branchId,
+    active: true, isCurrentAccount: false,
+  })
+  const cookie = await login("managed.fixture", "192.0.2.5", temporaryPassword)
+  expect((await get("/api/me", cookie)).statusCode).toBe(403)
+  expect((await write(`/api/manage/accounts/${id}`, manager, {
+    ...account, active: false, accountType: "user",
+  }, "PUT")).statusCode).toBe(204)
+  expect((await get("/api/auth/session", cookie)).statusCode).toBe(401)
+
+  expect((await write(`/api/manage/branches/${branchId}`, manager, { ...branch, active: false }, "PUT")).statusCode).toBe(204)
+  expect((await write("/api/manage/accounts", manager, {
+    ...account, loginName: "other.fixture", accountType: "user", temporaryPassword,
+  })).json()).toEqual({ error: "invalid_branch" })
+  expect((await write(`/api/manage/accounts/${ids.manager}`, manager, {
+    name: accountName, loginName: "manager.fixture", branchId: null, active: false,
+  }, "PUT")).json()).toEqual({ error: "protected_account" })
+  expect((await write(`/api/manage/accounts/${ids.manager}`, manager, {
+    name: accountName, loginName: "manager.fixture", branchId: null, active: true, accountType: "user",
+  }, "PUT")).json()).toEqual({ error: "protected_account" })
+  const audit = database.db.select().from(auditLog).all()
+  expect(audit.map((record) => record.action)).toEqual(["branch_created", "account_created", "account_updated", "branch_updated"])
+  expect(audit.every((record) => record.actorId === ids.manager)).toBe(true)
+})
+
+test("serves the fallback and accepts only a bounded PNG from the branding directory", async () => {
+  const fallback = await get("/branding/logo.png")
+  expect(fallback.statusCode).toBe(200)
+  expect(fallback.headers["content-type"]).toBe("image/png")
+  expect(fallback.headers["x-content-type-options"]).toBe("nosniff")
+  const bytes = await readFile(png)
+  expect(fallback.rawPayload.equals(bytes)).toBe(true)
+  const logo = join(root, "branding", "logo.png")
+  await writeFile(logo, "<svg/>")
+  expect((await get("/branding/logo.png")).rawPayload.equals(bytes)).toBe(true)
+
+  // A second valid PNG differs in one ancillary textual chunk.
+  const chunk = Buffer.from("000000057445587461006c616200000000", "hex")
+  chunk.writeUInt32BE(crc32(chunk.subarray(4, -4)), chunk.length - 4)
+  const replacement = Buffer.concat([bytes.subarray(0, -12), chunk, bytes.subarray(-12)])
+  await writeFile(logo, replacement)
+  const custom = await get("/branding/logo.png")
+  expect(custom.headers["cache-control"]).toBe("no-store")
+  expect(custom.rawPayload.equals(replacement)).toBe(true)
+})

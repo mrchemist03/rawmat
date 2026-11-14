@@ -17,7 +17,7 @@ RUN npm ci --omit=dev --workspace @rawmat/server --workspace @rawmat/shared --ig
 
 FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:6abfcb367ebc291572c774c1592a986be2ab26a2486f73093401327495a5962a
 WORKDIR /app
-ENV NODE_ENV=production DATABASE_PATH=/data/rawmat.sqlite
+ENV NODE_ENV=production DATABASE_PATH=/data/rawmat.sqlite BRANDING_PATH=/app/branding
 
 COPY --from=production-dependencies --chown=10001:10001 /data /data
 COPY --from=production-dependencies /app/node_modules ./node_modules
@@ -27,6 +27,7 @@ COPY --from=build /app/apps/server/migrations ./apps/server/migrations
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
+COPY --from=build /app/node_modules/@fontsource/tajawal/LICENSE ./licenses/Tajawal-OFL.txt
 
 USER 10001:10001
 EXPOSE 8080

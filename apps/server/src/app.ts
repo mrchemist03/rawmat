@@ -1,12 +1,15 @@
 import { join } from "node:path"
 import fastifyStatic from "@fastify/static"
-import { healthResponseSchema } from "@rawmat/shared"
+import { healthResponseSchema, meSchema } from "@rawmat/shared"
 import Fastify, { LogController } from "fastify"
 import { z } from "zod"
 import { healthHost } from "./config.js"
+import { readBrandLogo } from "./branding.js"
+import { can, navigationFor } from "./modules/auth/permissions.js"
 import { registerAuth } from "./modules/auth/routes.js"
 import type { AuthOptions } from "./modules/auth/routes.js"
 import { challengeOrigin } from "./modules/auth/turnstile.js"
+import { registerManagement } from "./modules/management/routes.js"
 
 const csp = [
   "default-src 'none'",
@@ -28,7 +31,7 @@ export function buildApp(
   appUrl: URL,
   webRoot: string,
   logger = true,
-  auth?: AuthOptions & { trustProxy: string | false },
+  auth?: AuthOptions & { trustProxy: string | false; brandingRoot?: string },
 ) {
   const app = Fastify({
     logger,
@@ -92,15 +95,42 @@ export function buildApp(
     cacheControl: false,
   })
 
+  app.get("/branding/logo.png", async (_request, reply) => {
+    const logo = await readBrandLogo(auth?.brandingRoot ?? "branding")
+    if (logo) return reply.type("image/png").send(logo)
+    return reply.sendFile("rawmat-logo.png", webRoot, { cacheControl: false }).type("image/png")
+  })
+
   if (auth) {
     app.register(async (scope) => {
-      const { hasSession } = await registerAuth(scope, auth)
+      const access = await registerAuth(scope, auth)
+      registerManagement(scope, access, auth)
+      const meError = z.toJSONSchema(z.strictObject({ error: z.string() }))
+      scope.get("/api/me", {
+        schema: { response: { 200: z.toJSONSchema(meSchema), 401: meError, 403: meError } },
+      }, async (request, reply) => {
+        const principal = access.touch(request, reply)
+        if (!principal) return reply.code(401).send({ error: "sign_in_required" })
+        if (principal.mustChangePassword) return reply.code(403).send({ error: "password_change_required" })
+        return { name: principal.name, navigation: navigationFor(principal.role) }
+      })
       scope.get("/", async (request, reply) => {
-        if (!hasSession(request)) return reply.redirect("/login")
+        if (!access.principal(request)) return reply.redirect("/login")
         return reply.sendFile("index.html", webRoot, { cacheControl: false })
       })
+      for (const [path, permission] of [
+        ["/accounts", "manageAccounts"], ["/branches", "manageBranches"],
+      ] as const) {
+        scope.get(path, async (request, reply) => {
+          const principal = access.principal(request)
+          if (!principal || principal.mustChangePassword || !can(principal.role, permission)) {
+            return reply.code(404).send({ error: "not_found" })
+          }
+          return reply.sendFile("index.html", webRoot, { cacheControl: false })
+        })
+      }
       scope.get("/login", async (request, reply) => {
-        if (hasSession(request)) return reply.redirect("/")
+        if (access.principal(request)) return reply.redirect("/")
         if (auth.config.turnstile) {
           const loginCsp = csp.replace("script-src 'self'", `script-src 'self' ${challengeOrigin}`)
           reply.header("Content-Security-Policy", `${loginCsp}; frame-src ${challengeOrigin}`)

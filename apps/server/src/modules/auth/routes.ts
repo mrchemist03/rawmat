@@ -154,9 +154,33 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions) {
   })
 
   return {
-    hasSession(request: FastifyRequest) {
+    principal(request: FastifyRequest) {
       const tokenHash = getSessionHash(request)
-      return Boolean(tokenHash && repository.findSession(tokenHash, now()))
+      return tokenHash ? repository.findSession(tokenHash, now()) : undefined
+    },
+    touch(request: FastifyRequest, reply: FastifyReply) {
+      const tokenHash = getSessionHash(request)
+      if (!tokenHash) return
+      const principal = repository.touchSession(tokenHash, now())
+      const signed = request.cookies[sessionCookie]
+      if (principal && signed) reply.setCookie(sessionCookie, signed, { ...cookieOptions, maxAge: idleTimeout / 1_000 })
+      return principal
+    },
+    reserveManagementWrite(actorId: string, request: FastifyRequest) {
+      return repository.reserveLoginAttempt(
+        keyed("management-actor", actorId), keyed("management-address", clientAddress(request)), now(), 60,
+      )
+    },
+    async hashTemporaryPassword(password: string) {
+      if (pendingPasswords >= 2) return
+      pendingPasswords += 1
+      try {
+        return await hashPassword(password)
+      } finally {
+        pendingPasswords -= 1
+      }
     },
   }
 }
+
+export type AuthAccess = Awaited<ReturnType<typeof registerAuth>>

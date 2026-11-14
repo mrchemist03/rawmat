@@ -1,15 +1,12 @@
 import { z } from "zod"
+import { loginNameSchema, newPasswordSchema } from "./credentials.js"
+
+export * from "./credentials.js"
+export * from "./management.js"
 
 export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),
 })
-
-export const loginNameSchema = z.string().trim().min(3).max(64)
-  .regex(/^[\p{L}\p{N}_.-]+$/u)
-  .transform((name) => name.toLowerCase())
-
-export const newPasswordSchema = z.string().max(128)
-  .refine((password) => [...password].length >= 12)
 
 const submittedPasswordSchema = z.string().min(1).max(128)
 

@@ -12,6 +12,7 @@ export function createAuthRepository(db: AppDatabase) {
   const sessionRecord = {
     id: users.id,
     name: users.name,
+    role: users.role,
     mustChangePassword: users.mustChangePassword,
   }
 
@@ -31,7 +32,7 @@ export function createAuthRepository(db: AppDatabase) {
         .from(users).where(and(eq(users.loginName, loginName), eq(users.active, true))).get()
     },
 
-    reserveLoginAttempt(accountKey: string, addressKey: string, now: number) {
+    reserveLoginAttempt(accountKey: string, addressKey: string, now: number, limit = loginLimit) {
       return db.transaction((tx) => {
         const cutoff = now - loginWindow
         tx.delete(loginAttempts).where(lte(loginAttempts.attemptedAt, cutoff)).run()
@@ -39,7 +40,7 @@ export function createAuthRepository(db: AppDatabase) {
           .where(eq(loginAttempts.accountKey, accountKey)).get()
         const address = tx.select({ count: count() }).from(loginAttempts)
           .where(eq(loginAttempts.addressKey, addressKey)).get()
-        if ((account?.count ?? 0) >= loginLimit || (address?.count ?? 0) >= loginLimit) return false
+        if ((account?.count ?? 0) >= limit || (address?.count ?? 0) >= limit) return false
         tx.insert(loginAttempts).values({ accountKey, addressKey, attemptedAt: now }).run()
         return true
       }, { behavior: "immediate" })
