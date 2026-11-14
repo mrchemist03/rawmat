@@ -12,6 +12,7 @@ import { challengeOrigin } from "./modules/auth/turnstile.js"
 import { registerCatalogue } from "./modules/catalogue/routes.js"
 import { registerManagement } from "./modules/management/routes.js"
 import { registerAudit } from "./modules/management/audit.js"
+import { registerPurchases } from "./modules/purchases/routes.js"
 
 const csp = [
   "default-src 'none'",
@@ -109,6 +110,7 @@ export function buildApp(
       registerManagement(scope, access, auth)
       registerCatalogue(scope, access, auth)
       registerAudit(scope, access, auth.db)
+      registerPurchases(scope, access, auth)
       const meError = z.toJSONSchema(z.strictObject({ error: z.string() }))
       scope.get("/api/me", {
         schema: { response: { 200: z.toJSONSchema(meSchema), 401: meError, 403: meError } },
@@ -126,6 +128,7 @@ export function buildApp(
         ["/accounts", "manageAccounts"], ["/branches", "manageBranches"],
         ["/materials", "viewWorkspace"], ["/references", "manageReferenceData"],
         ["/audit", "viewAudit"],
+        ["/purchases", "viewWorkspace"],
       ] as const) {
         scope.get(path, async (request, reply) => {
           const principal = access.principal(request)

@@ -15,6 +15,9 @@ const actions: Record<string, string> = {
   material_similarity_confirmed: "تأكيد حفظ مادة مشابهة",
   materials_merged: "دمج مادتين",
   material_import: "استيراد مواد",
+  purchase_created: "إنشاء مسودة شراء",
+  purchase_updated: "تعديل مسودة شراء",
+  purchase_submitted: "إرسال طلب شراء",
   reference_created: "إضافة سجل مرجعي",
   reference_updated: "تعديل سجل مرجعي",
 }

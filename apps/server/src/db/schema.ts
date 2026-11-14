@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm"
 import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import { uniqueIndex } from "drizzle-orm/sqlite-core"
+import type { PurchaseStatus } from "@rawmat/shared"
 
 export const branches = sqliteTable("branches", {
   id: text().primaryKey(),
@@ -103,4 +104,41 @@ export const materials = sqliteTable("materials", {
   uniqueIndex("materials_normalized_unit_unique").on(table.nameNormalized, table.unitId)
     .where(sql`${table.mergedIntoId} is null and ${table.legacyDuplicate} = 0 and ${table.nameNormalized} <> ''`),
   index("materials_merge_target").on(table.mergedIntoId),
+])
+
+export const purchaseRequests = sqliteTable("purchase_requests", {
+  id: text().primaryKey().notNull(),
+  number: text().notNull().unique(),
+  branchId: text("branch_id").notNull().references(() => branches.id),
+  requestedBy: text("requested_by").notNull().references(() => users.id),
+  supplierId: text("supplier_id").references(() => suppliers.id),
+  neededOn: text("needed_on").notNull(),
+  notes: text().notNull().default(""),
+  status: text().$type<PurchaseStatus>().notNull().default("draft"),
+  revision: integer().notNull().default(1),
+  createdAt: integer("created_at").notNull(),
+  submittedAt: integer("submitted_at"),
+}, (table) => [
+  check("purchase_requests_status_valid", sql`${table.status} in ('draft','submitted','approved','rejected','ordered','partially_received','received','cancelled')`),
+  check("purchase_requests_revision_valid", sql`${table.revision} >= 1`),
+  index("purchase_requests_status_created").on(table.status, table.createdAt),
+  index("purchase_requests_needed").on(table.neededOn),
+  index("purchase_requests_branch").on(table.branchId),
+  index("purchase_requests_requester").on(table.requestedBy),
+  index("purchase_requests_supplier").on(table.supplierId),
+])
+
+export const purchaseRequestItems = sqliteTable("purchase_request_items", {
+  id: text().primaryKey().notNull(),
+  requestId: text("request_id").notNull().references(() => purchaseRequests.id, { onDelete: "cascade" }),
+  position: integer().notNull(),
+  materialId: text("material_id").notNull().references(() => materials.id),
+  quantity: real().notNull(),
+  receivedQuantity: real("received_quantity").notNull().default(0),
+}, (table) => [
+  uniqueIndex("purchase_items_request_material").on(table.requestId, table.materialId),
+  uniqueIndex("purchase_items_request_position").on(table.requestId, table.position),
+  index("purchase_items_material").on(table.materialId),
+  check("purchase_items_quantity_valid", sql`${table.quantity} > 0 and ${table.quantity} <= 1000000000`),
+  check("purchase_items_received_valid", sql`${table.receivedQuantity} between 0 and ${table.quantity}`),
 ])

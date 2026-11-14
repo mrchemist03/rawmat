@@ -66,7 +66,7 @@ export function Listing({ data, children }: { data: ReturnType<typeof useCollect
   )
 }
 
-export function useEditor(path: string, id: string | undefined, onSaved: () => void,
+export function useEditor(path: string, id: string | undefined, onSaved: (response: Response) => void | Promise<void>,
   onRejected?: (response: Response) => Promise<boolean>) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
@@ -75,7 +75,7 @@ export function useEditor(path: string, id: string | undefined, onSaved: () => v
     setError("")
     try {
       const response = await request(id ? `${path}/${id}` : path, payload, id ? "PUT" : "POST")
-      if (response.ok) return onSaved()
+      if (response.ok) return await onSaved(response)
       if (onRejected && await onRejected(response.clone())) return
       setError(await rejection(response))
     } catch {

@@ -7,6 +7,7 @@ import { rejection, request, unavailable } from "./api"
 import { Accounts, Branches } from "./management"
 import { Materials, References } from "./catalogue"
 import { Audit } from "./audit"
+import { Purchases } from "./purchases"
 import { Turnstile } from "./turnstile"
 
 type Session = z.infer<typeof sessionViewSchema>
@@ -184,6 +185,7 @@ function Account() {
 const navigation: Record<NavigationItem, { path: string; title: string }> = {
   account: { path: "/", title: "حسابي" },
   materials: { path: "/materials", title: "المواد الأولية" },
+  purchases: { path: "/purchases", title: "طلبات الشراء" },
   accounts: { path: "/accounts", title: "الحسابات" },
   branches: { path: "/branches", title: "الشعب" },
   references: { path: "/references", title: "القوائم المرجعية" },
@@ -227,6 +229,7 @@ function Workspace({ onLogout, busy, error }: { onLogout: () => void; busy: bool
         {current === "accounts" && <Accounts />}
         {current === "branches" && <Branches />}
         {current === "materials" && <Materials />}
+        {current === "purchases" && <Purchases />}
         {current === "references" && <References />}
         {current === "audit" && <Audit />}
         {current === "account" && <section className="surface"><h1>حسابي</h1><p>مرحبًا، <bdi>{profile.name}</bdi>.</p></section>}
