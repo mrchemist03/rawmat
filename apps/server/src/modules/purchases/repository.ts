@@ -7,6 +7,7 @@ import { auditLog, branches, materials, purchaseRequestItems, purchaseRequests, 
 import { canTransition } from "./workflow.js"
 import { pricesFor, refreshMaterialCosts, writePrices } from "./costs.js"
 import { Quantity } from "../inventory/quantity.js"
+import { listActiveBranches } from "../inventory/repository.js"
 
 type Actor = { id: string; canCreate: boolean; canManage: boolean; canApprove: boolean; canViewCosts: boolean }
 type Connection = Pick<AppDatabase, "select" | "insert" | "update" | "delete">
@@ -80,12 +81,7 @@ export function createPurchaseRepository(db: AppDatabase, now: () => number) {
     },
 
     listBranches(search: string, page: number) {
-      const filter = and(eq(branches.active, true), search
-        ? sql`instr(lower(${branches.name}), ${search.toLowerCase()}) > 0`
-        : undefined)
-      const items = db.select({ id: branches.id, name: branches.name }).from(branches).where(filter)
-        .orderBy(asc(branches.name), asc(branches.id)).limit(pageSize).offset((page - 1) * pageSize).all()
-      return { items, total: db.select({ total: count() }).from(branches).where(filter).get()?.total ?? 0 }
+      return listActiveBranches(db, search, page)
     },
 
     detail(actor: Actor, id: string) {

@@ -23,6 +23,9 @@ const actions: Record<string, string> = {
   purchase_ordered: "تأكيد الشراء",
   purchase_cancelled: "إلغاء طلب شراء",
   purchase_receipt: "تسجيل استلام",
+  shipment_created: "تسجيل شحنة",
+  shipment_tracking_updated: "تحديث تتبع شحنة",
+  shipment_received: "تأكيد استلام شحنة",
   reference_created: "إضافة سجل مرجعي",
   reference_updated: "تعديل سجل مرجعي",
 }

@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm"
 import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import { uniqueIndex } from "drizzle-orm/sqlite-core"
-import type { PurchaseStatus } from "@rawmat/shared"
+import type { PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
 
 export const branches = sqliteTable("branches", {
   id: text().primaryKey(),
@@ -177,4 +177,51 @@ export const stockMovements = sqliteTable("stock_movements", {
 }, (table) => [
   uniqueIndex("stock_movements_reference").on(table.kind, table.referenceId, table.referenceItemId, table.referenceRevision),
   index("stock_movements_material_branch").on(table.materialId, table.branchId),
+])
+
+export const shipments = sqliteTable("shipments", {
+  id: text().primaryKey().notNull(),
+  trackingNumber: text("tracking_number").notNull().unique(),
+  sourceId: text("source_id").notNull().references(() => branches.id),
+  destinationId: text("destination_id").notNull().references(() => branches.id),
+  dispatchedOn: text("dispatched_on").notNull(),
+  createdBy: text("created_by").notNull().references(() => users.id),
+  status: text().$type<ShipmentStatus>().notNull().default("registered"),
+  revision: integer().notNull().default(1),
+  receivedAt: integer("received_at"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  check("shipment_branches_distinct", sql`${table.sourceId} <> ${table.destinationId}`),
+  check("shipment_status_valid", sql`${table.status} in ('registered','picked_up','in_transit','out_for_delivery','delivered','exception','returned')`),
+  index("shipments_status_date").on(table.status, table.dispatchedOn),
+])
+
+export const shipmentItems = sqliteTable("shipment_items", {
+  id: text().primaryKey().notNull(),
+  shipmentId: text("shipment_id").notNull().references(() => shipments.id),
+  position: integer().notNull(),
+  materialId: text("material_id").references(() => materials.id),
+  description: text(),
+  quantity: text().notNull(),
+  receivedQuantity: text("received_quantity"),
+}, (table) => [
+  check("shipment_item_variant", sql`(${table.materialId} is null) <> (${table.description} is null)`),
+  uniqueIndex("shipment_items_position").on(table.shipmentId, table.position),
+  uniqueIndex("shipment_items_material_unique").on(table.shipmentId, table.materialId),
+  index("shipment_items_material").on(table.materialId),
+])
+
+export const trackingEvents = sqliteTable("tracking_events", {
+  id: text().primaryKey().notNull(),
+  shipmentId: text("shipment_id").notNull().references(() => shipments.id),
+  status: text().$type<ShipmentStatus>().notNull(),
+  code: text().notNull(),
+  description: text().notNull(),
+  location: text().notNull().default(""),
+  occurredAt: integer("occurred_at").notNull(),
+  revision: integer().notNull(),
+  source: text().notNull(),
+}, (table) => [
+  uniqueIndex("tracking_events_revision").on(table.shipmentId, table.revision),
+  uniqueIndex("tracking_events_event").on(table.shipmentId, table.code, table.occurredAt),
 ])

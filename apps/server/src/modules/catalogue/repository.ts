@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 import { pageSize } from "@rawmat/shared"
 import type { LookupKind, MaterialInput, MaterialQuery, SimilarityReport, SupplierInput } from "@rawmat/shared"
 import type { AppDatabase } from "../../db/database.js"
-import { auditLog, categories, materials, purchaseRequestItems, stockMovements, suppliers, units } from "../../db/schema.js"
+import { auditLog, categories, materials, purchaseRequestItems, shipmentItems, stockMovements, suppliers, units } from "../../db/schema.js"
 import { normalizeMaterialName, similarityIndex } from "./similarity.js"
 import type { SimilarityThresholds } from "./similarity.js"
 import type { CsvRow } from "./csv.js"
@@ -50,6 +50,7 @@ export function createCatalogueRepository(db: AppDatabase, now: () => number, th
     if (original && original.unitId !== input.unitId && (
       tx.select({ id: purchaseRequestItems.id }).from(purchaseRequestItems).where(eq(purchaseRequestItems.materialId, original.id)).get() ||
       tx.select({ id: stockMovements.id }).from(stockMovements).where(eq(stockMovements.materialId, original.id)).get() ||
+      tx.select({ id: shipmentItems.id }).from(shipmentItems).where(eq(shipmentItems.materialId, original.id)).get() ||
       tx.select({ id: materials.id }).from(materials).where(eq(materials.mergedIntoId, original.id)).get()
     )) return "material_unit_in_use"
     const normalized = normalizeMaterialName(input.name)

@@ -21,7 +21,7 @@ export function can(role: AccountType, capability: Capability) {
 
 export function navigationFor(role: AccountType): NavigationItem[] {
   const result: NavigationItem[] = ["account"]
-  if (can(role, "viewWorkspace")) result.push("materials", "purchases")
+  if (can(role, "viewWorkspace")) result.push("materials", "purchases", "shipments")
   if (can(role, "manageAccounts")) result.push("accounts")
   if (can(role, "manageBranches")) result.push("branches")
   if (can(role, "manageReferenceData")) result.push("references")

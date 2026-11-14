@@ -13,6 +13,7 @@ export function createAuthRepository(db: AppDatabase) {
     id: users.id,
     name: users.name,
     role: users.role,
+    branchId: users.branchId,
     mustChangePassword: users.mustChangePassword,
   }
 
