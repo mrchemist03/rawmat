@@ -84,6 +84,10 @@ docker compose --env-file deploy/.env -f deploy/compose.yml exec app /nodejs/bin
 
 لتفعيل Turnstile، اضبط `TURNSTILE_SITE_KEY` و`TURNSTILE_SECRET_KEY` معًا. طابق النطاق المسموح في Cloudflare مع نطاق `APP_URL` وأعد تشغيل الحاوية بعد تعديل الإعدادات. يبقى مزوّد التحقق اختياريًا ما دام المفتاحان فارغين.
 
+لتفعيل التتبع الآلي عبر واجهة أراميكس الرسمية، اضبط `TRACKING_PROVIDER=aramex` وأضف `ARAMEX_USERNAME` و`ARAMEX_PASSWORD` و`ARAMEX_ACCOUNT_NUMBER` و`ARAMEX_ACCOUNT_PIN` و`ARAMEX_ACCOUNT_ENTITY` و`ARAMEX_ACCOUNT_COUNTRY_CODE` إلى ملف بيئة خاص على الخادم. قيمة `ARAMEX_API_VERSION` الافتراضية هي `v1`. اجعل إذونات الملف `0600` ثم أعد إنشاء الحاوية باستخدام ملف البيئة. يبقى التتبع اليدوي متاحًا، ويمكن تعطيل الاستطلاع بضبط `TRACKING_PROVIDER=manual`.
+
+يتصل الخادم بأراميكس عبر HTTPS، ويستطلع الشحنات النشطة كل 60 دقيقة افتراضيًا. يغيّر `TRACKING_POLL_MINUTES` هذا الفاصل. تُعرض الأحداث الواردة في سجل الشحنة، ويستطيع الحساب المخوّل طلب «تحديث الآن». عند توفر جدول أكواد معتمد من أراميكس، اضبط `ARAMEX_STATUS_MAP` على كائن JSON يربط الأكواد بحالات التطبيق. إذا غاب فرق التوقيت عن حدث، يمكن ضبط `ARAMEX_EVENT_UTC_OFFSET` على الفرق الخاص ببيانات الحساب.
+
 لتخصيص الشعار، ضع ملف PNG بحجم لا يتجاوز 512 كيلوبايت وأبعاد لا تتجاوز 2048 بكسل في `deploy/branding/logo.png`. يظهر الملف الجديد عند إعادة تحميل الصفحة، ويعرض التطبيق شعاره الافتراضي عند غياب الملف. يُخدم خط Tajawal من الحاوية بصيغة WOFF2. [ترخيص الخط SIL OFL](https://github.com/googlefonts/tajawal/blob/main/OFL.txt)
 
 ## الأمان

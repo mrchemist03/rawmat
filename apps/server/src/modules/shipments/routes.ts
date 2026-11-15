@@ -7,10 +7,30 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { can } from "../auth/permissions.js"
 import type { AuthAccess, AuthOptions } from "../auth/routes.js"
 import { listActiveBranches } from "../inventory/repository.js"
+import { createTrackingPoller, trackingRefreshDelay } from "./polling.js"
 import { createShipmentRepository } from "./repository.js"
+import type { TrackingProvider } from "./tracking.js"
 
-export function registerShipments(app: FastifyInstance, auth: AuthAccess, options: AuthOptions) {
-  const repository = createShipmentRepository(options.db, options.now ?? Date.now)
+export function registerShipments(app: FastifyInstance, auth: AuthAccess, options: AuthOptions & {
+  shipmentTracking?: { provider: TrackingProvider; intervalMs?: number }
+}) {
+  const now = options.now ?? Date.now
+  const tracking = options.shipmentTracking
+  const repository = createShipmentRepository(options.db, now, Boolean(tracking))
+  const poller = tracking && createTrackingPoller(options.db, tracking.provider, now, tracking.intervalMs)
+  const shutdown = new AbortController()
+  function poll() {
+    return poller?.run(shutdown.signal).catch(() => app.log.error("shipment polling failed"))
+  }
+  if (poller) {
+    const timer = setInterval(poll, 5_000).unref()
+    app.addHook("onListen", async () => { void poll() })
+    app.addHook("preClose", async () => {
+      clearInterval(timer)
+      shutdown.abort()
+      await poll()
+    })
+  }
   const notFound = (reply: FastifyReply) => reply.code(404).send({ error: "not_found" })
   const invalid = (reply: FastifyReply) => reply.code(400).send({ error: "invalid_input" })
 
@@ -77,6 +97,7 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
     if (!input.success) return invalid(reply)
     const result = repository.create(actor, input.data)
     if (typeof result === "string") return finish(reply, result)
+    if (!result.duplicate && poller) setImmediate(() => void poll())
     return reply.header("Location", `/api/shipments/${result.id}`)
       .code(result.duplicate ? 200 : 201).send(shipmentIdSchema.parse({ id: result.id }))
   })
@@ -89,6 +110,20 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
     const input = shipmentUpdateSchema.safeParse(request.body)
     if (!input.success) return invalid(reply)
     return finish(reply, repository.update(actor, params.data.id, input.data))
+  })
+
+  app.post("/api/shipments/:id/refresh", { bodyLimit: 1024 }, async (request, reply) => {
+    const actor = authorize(request, reply, true)
+    if (!actor) return
+    const params = shipmentIdSchema.safeParse(request.params)
+    if (!params.success) return notFound(reply)
+    const result = repository.requestRefresh(actor, params.data.id)
+    if (result === "tracking_refresh_limited") {
+      return reply.header("Retry-After", String(trackingRefreshDelay / 1000)).code(429).send({ error: result })
+    }
+    if (result !== "queued") return finish(reply, result)
+    setImmediate(() => void poll())
+    return reply.code(202).send()
   })
 
   app.post("/api/shipments/:id/receipt", { bodyLimit: 65_536 }, async (request, reply) => {

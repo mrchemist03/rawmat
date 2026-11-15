@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url"
 import { buildApp } from "./app.js"
 import { port, readServerConfig } from "./config.js"
 import { openDatabase } from "./db/database.js"
+import { createAramexProvider } from "./modules/shipments/aramex.js"
 
 try {
   process.umask(0o077)
@@ -13,6 +14,9 @@ try {
     similarityThresholds: config.similarityThresholds,
     baseCurrency: config.baseCurrency,
     brandingRoot: process.env.BRANDING_PATH || "./deploy/branding",
+    shipmentTracking: config.aramex && {
+      provider: createAramexProvider(config.aramex), intervalMs: config.trackingIntervalMs,
+    },
   })
   app.addHook("onClose", async () => database.close())
   const shutdown = () => {

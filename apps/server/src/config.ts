@@ -3,6 +3,7 @@ import { purchaseCurrencySchema } from "@rawmat/shared"
 import ipaddr from "ipaddr.js"
 import { z } from "zod"
 import { defaultThresholds } from "./modules/catalogue/similarity.js"
+import { readAramexConfig } from "./modules/shipments/aramex.js"
 
 const appUrlSchema = z.url().transform((value) => new URL(value)).refine((url) => {
   const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
@@ -49,6 +50,14 @@ export function readServerConfig(env: NodeJS.ProcessEnv) {
   if (!(warning >= 0.5 && warning < high && high <= 1)) {
     throw new Error("Material similarity thresholds must satisfy 0.5 <= warning < high <= 1")
   }
+  const trackingProvider = env.TRACKING_PROVIDER || "manual"
+  if (trackingProvider !== "manual" && trackingProvider !== "aramex") {
+    throw new Error("TRACKING_PROVIDER must be manual or aramex")
+  }
+  const pollMinutes = Number(env.TRACKING_POLL_MINUTES || "60")
+  if (!Number.isInteger(pollMinutes) || pollMinutes < 1 || pollMinutes > 1440) {
+    throw new Error("TRACKING_POLL_MINUTES must be an integer from 1 to 1440")
+  }
   return {
     appUrl,
     sessionSecret: sessionSecret ?? randomBytes(32),
@@ -57,5 +66,7 @@ export function readServerConfig(env: NodeJS.ProcessEnv) {
     turnstile: siteKey && secretKey ? { siteKey, secretKey } : undefined,
     similarityThresholds: { warning, high },
     baseCurrency: purchaseCurrencySchema.parse(env.BASE_CURRENCY || "TRY"),
+    aramex: trackingProvider === "aramex" ? readAramexConfig(env) : undefined,
+    trackingIntervalMs: pollMinutes * 60_000,
   }
 }

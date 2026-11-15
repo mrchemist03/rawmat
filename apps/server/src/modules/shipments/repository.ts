@@ -7,7 +7,8 @@ import type { AppDatabase } from "../../db/database.js"
 import { auditLog, branches, materials, shipmentItems, shipments, stockMovements, trackingEvents, units } from "../../db/schema.js"
 import { Quantity } from "../inventory/quantity.js"
 import { branchBalance } from "../inventory/repository.js"
-import { canUpdateTracking, ManualProvider } from "./tracking.js"
+import { trackingRefreshDelay, trackingState } from "./polling.js"
+import { canUpdateTracking, ManualProvider, trackingFinished } from "./tracking.js"
 import type { TrackingEvent } from "./tracking.js"
 
 type Actor = { id: string; branchId: string | null; manage: boolean }
@@ -33,7 +34,7 @@ function canReceive(row: Shipment, actor: Actor) {
   return actor.manage || actor.branchId === (row.status === "returned" ? row.sourceId : row.destinationId)
 }
 
-export function createShipmentRepository(db: AppDatabase, now: () => number) {
+export function createShipmentRepository(db: AppDatabase, now: () => number, automatic = false) {
   const provider = new ManualProvider()
   function audit(tx: Connection, actor: Actor, shipmentId: string, action: string, after: Record<string, string | number>) {
     tx.insert(auditLog).values({ id: randomUUID(), actorId: actor.id, entity: "shipment", entityId: shipmentId,
@@ -47,7 +48,10 @@ export function createShipmentRepository(db: AppDatabase, now: () => number) {
   function listing() {
     return db.select(summary).from(shipments).innerJoin(source, eq(source.id, shipments.sourceId))
       .innerJoin(destination, eq(destination.id, shipments.destinationId))
-      .innerJoin(last, and(eq(last.shipmentId, shipments.id), eq(last.revision, shipments.revision)))
+      .innerJoin(last, eq(last.id, sql`coalesce((select event.id from tracking_events as event
+        where event.shipment_id = ${shipments.id} and event.revision > 1
+        order by event.occurred_at desc, event.revision desc limit 1),
+        (select first.id from tracking_events as first where first.shipment_id = ${shipments.id} and first.revision = 1))`))
   }
 
   return {
@@ -78,10 +82,28 @@ export function createShipmentRepository(db: AppDatabase, now: () => number) {
         .leftJoin(units, eq(materials.unitId, units.id)).where(eq(shipmentItems.shipmentId, id)).orderBy(shipmentItems.position).all()
       const events = db.select(eventFields).from(trackingEvents).where(eq(trackingEvents.shipmentId, id))
         .orderBy(desc(trackingEvents.occurredAt), desc(trackingEvents.revision)).limit(100).all()
-      return { ...header, revision: row.revision, items, events, actions: {
-        update: row.receivedAt === null && canTrack(row, actor) && row.status !== "returned" && row.status !== "delivered",
+      const finished = trackingFinished(row.status, row.receivedAt)
+      return { ...header, revision: row.revision, items, events,
+        tracking: automatic ? { state: trackingState(row, now()), lastPolledAt: row.lastPolledAt } : null,
+        actions: {
+        update: !finished && canTrack(row, actor),
         receive: row.receivedAt === null && canReceive(row, actor),
+        refresh: automatic && !finished && canTrack(row, actor),
       } }
+    },
+
+    requestRefresh(actor: Actor, id: string) {
+      return db.transaction((tx) => {
+        const row = tx.select().from(shipments).where(eq(shipments.id, id)).get()
+        if (!row || !automatic || !canTrack(row, actor)) return "missing"
+        if (trackingFinished(row.status, row.receivedAt)) return "invalid_shipment_transition"
+        const time = now()
+        if ((row.pollLeaseUntil ?? 0) > time || (row.lastRefreshAt !== null && time - row.lastRefreshAt < trackingRefreshDelay)) {
+          return "tracking_refresh_limited"
+        }
+        tx.update(shipments).set({ lastRefreshAt: time, nextPollAt: time }).where(eq(shipments.id, id)).run()
+        return "queued"
+      }, { behavior: "immediate" })
     },
 
     create(actor: Actor, input: ShipmentInput) {
@@ -129,11 +151,12 @@ export function createShipmentRepository(db: AppDatabase, now: () => number) {
         if (row.revision !== input.revision) return "stale_shipment"
         if (row.receivedAt !== null || !canUpdateTracking(row.status, input.status)) return "invalid_shipment_transition"
         const event = provider.event(input.status, input.description, input.location, now())
-        const latest = tx.select().from(trackingEvents).where(and(eq(trackingEvents.shipmentId, id), eq(trackingEvents.revision, row.revision))).get()
+        const latest = tx.select().from(trackingEvents).where(eq(trackingEvents.shipmentId, id))
+          .orderBy(desc(trackingEvents.occurredAt), desc(trackingEvents.revision)).limit(1).get()
         if (latest && latest.status === event.status && latest.description === event.description && latest.location === event.location) return "saved"
         const revision = row.revision + 1
         if (latest) event.occurredAt = Math.max(event.occurredAt, latest.occurredAt + 1)
-        tx.update(shipments).set({ revision, status: input.status }).where(eq(shipments.id, id)).run()
+        tx.update(shipments).set({ revision, status: input.status, trackingChangedAt: now() }).where(eq(shipments.id, id)).run()
         addEvent(tx, id, revision, event)
         audit(tx, actor, id, "shipment_tracking_updated", { status: input.status, revision })
         return "saved"
@@ -162,7 +185,7 @@ export function createShipmentRepository(db: AppDatabase, now: () => number) {
         const branchId = returned ? row.sourceId : row.destinationId
         const revision = row.revision + 1
         const latest = tx.select({ occurredAt: trackingEvents.occurredAt }).from(trackingEvents)
-          .where(and(eq(trackingEvents.shipmentId, id), eq(trackingEvents.revision, row.revision))).get()
+          .where(eq(trackingEvents.shipmentId, id)).orderBy(desc(trackingEvents.occurredAt)).limit(1).get()
         const occurredAt = Math.max(now(), latest?.occurredAt ?? 0)
         const status = returned ? "returned" : "delivered"
         const movements: StockRow[] = []

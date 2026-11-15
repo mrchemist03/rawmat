@@ -190,10 +190,17 @@ export const shipments = sqliteTable("shipments", {
   revision: integer().notNull().default(1),
   receivedAt: integer("received_at"),
   createdAt: integer("created_at").notNull(),
+  nextPollAt: integer("next_poll_at").notNull().default(0),
+  pollLeaseUntil: integer("poll_lease_until"),
+  pollFailures: integer("poll_failures").notNull().default(0),
+  lastPolledAt: integer("last_polled_at"),
+  trackingChangedAt: integer("tracking_changed_at"),
+  lastRefreshAt: integer("last_refresh_at"),
 }, (table) => [
   check("shipment_branches_distinct", sql`${table.sourceId} <> ${table.destinationId}`),
   check("shipment_status_valid", sql`${table.status} in ('registered','picked_up','in_transit','out_for_delivery','delivered','exception','returned')`),
   index("shipments_status_date").on(table.status, table.dispatchedOn),
+  index("shipments_next_poll").on(table.nextPollAt).where(sql`${table.receivedAt} is null and ${table.status} not in ('delivered', 'returned')`),
 ])
 
 export const shipmentItems = sqliteTable("shipment_items", {
@@ -221,7 +228,9 @@ export const trackingEvents = sqliteTable("tracking_events", {
   occurredAt: integer("occurred_at").notNull(),
   revision: integer().notNull(),
   source: text().notNull(),
+  raw: text(),
 }, (table) => [
   uniqueIndex("tracking_events_revision").on(table.shipmentId, table.revision),
   uniqueIndex("tracking_events_event").on(table.shipmentId, table.code, table.occurredAt),
+  index("tracking_events_timeline").on(table.shipmentId, table.occurredAt, table.revision),
 ])

@@ -21,6 +21,7 @@ const messages: Record<string, string> = {
   invalid_shipment_transition: "الحالة الحالية لا تسمح بهذا التحديث.",
   invalid_shipment_receipt: "أدخل كمية مستلمة لكل بند ضمن الكمية المرسلة.",
   shipment_closed: "تم تأكيد استلام الشحنة سابقًا.",
+  tracking_refresh_limited: "انتظر دقيقتين بين طلبات تحديث الشحنة.",
   protected_account: "يمكنك تعديل بيانات حسابك الأساسية. غيّر كلمة مرورك من مسار المصادقة.",
   rate_limited: "محاولات كثيرة. انتظر 15 دقيقة قبل المحاولة مجددًا.",
   challenge_required: "أكمل التحقق البشري ثم أعد المحاولة.",

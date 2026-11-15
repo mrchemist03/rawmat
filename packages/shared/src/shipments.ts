@@ -41,7 +41,11 @@ const summary = z.strictObject({
 export const shipmentListSchema = z.strictObject({ items: z.array(summary), total: z.number().int() })
 export const shipmentDetailSchema = summary.extend({
   revision, events: z.array(eventSchema),
-  actions: z.strictObject({ update: z.boolean(), receive: z.boolean() }),
+  tracking: z.strictObject({
+    state: z.enum(["idle", "pending", "retrying", "stalled", "finished"]),
+    lastPolledAt: z.number().int().nullable(),
+  }).nullable(),
+  actions: z.strictObject({ update: z.boolean(), receive: z.boolean(), refresh: z.boolean() }),
   items: z.array(z.strictObject({
     id: z.uuid(), name: z.string(), unitName: z.string().nullable(), quantity: receiptQuantity,
     receivedQuantity: receiptQuantity.nullable(),

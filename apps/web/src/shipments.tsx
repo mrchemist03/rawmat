@@ -18,6 +18,13 @@ const labels: Record<ShipmentStatus, string> = {
 const dateTime = new Intl.DateTimeFormat("ar-u-ca-gregory-nu-latn", {
   dateStyle: "medium", timeStyle: "short",
 })
+const trackingNotes = {
+  pending: "بانتظار نتيجة التحديث الآلي.",
+  retrying: "تعذّر جلب الحالة. ستُعاد المحاولة تلقائيًا.",
+  stalled: "توقف التحديث الآلي لعدم ورود حدث جديد خلال 30 يومًا.",
+  idle: "",
+  finished: "",
+}
 type Item = { key: number; kind: "material" | "description"; material?: ReferenceOption; description: string; quantity: string }
 
 function emptyItem(key: number): Item {
@@ -149,12 +156,30 @@ function ShipmentAction({ item, action, onClose, onSaved }: {
 
 function ShipmentDetails({ item, onClose, changed }: { item: ShipmentDetail; onClose: () => void; changed: (message: string) => void }) {
   const [action, setAction] = useState<"tracking" | "receipt">()
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState("")
   const carrier = new URL("https://www.aramex.com/ae/en/track/results")
   carrier.searchParams.set("ShipmentNumber", item.trackingNumber)
+  async function refreshTracking() {
+    setRefreshing(true)
+    setRefreshError("")
+    try {
+      const response = await request(`${path}/${item.id}/refresh`, {})
+      if (!response.ok) return setRefreshError(await rejection(response))
+      changed("تم طلب تحديث التتبع.")
+    } catch {
+      setRefreshError(unavailable)
+    } finally {
+      setRefreshing(false)
+    }
+  }
   return <section className="editor">
     <h2>الشحنة <bdi>{item.trackingNumber}</bdi></h2>
     <p>{item.sourceName} ← {item.destinationName} · {labels[item.status]} · <bdi>{item.dispatchedOn}</bdi></p>
     {item.receivedAt !== null && <p role="status">الاستلام مؤكّد · <bdi>{dateTime.format(item.receivedAt)}</bdi></p>}
+    {item.tracking?.lastPolledAt != null && <p>آخر تحديث ناجح · <bdi>{dateTime.format(item.tracking.lastPolledAt)}</bdi></p>}
+    {item.tracking && trackingNotes[item.tracking.state] && <p role="status">{trackingNotes[item.tracking.state]}</p>}
+    {refreshError && <p role="alert" className="error">{refreshError}</p>}
     <p><a href={carrier.href} target="_blank" rel="noopener noreferrer">عرض التتبع في أراميكس</a></p>
     <h3>المحتويات</h3>
     <ul>{item.items.map((line) => <li key={line.id}>
@@ -165,6 +190,8 @@ function ShipmentDetails({ item, onClose, changed }: { item: ShipmentDetail; onC
       onSaved={() => changed(action === "tracking" ? "تم تحديث حالة الشحنة." : "تم تأكيد استلام الشحنة.")} />}
     {!action && <div className="actions purchase-actions">
       {item.actions.update && <button type="button" onClick={() => setAction("tracking")}>تحديث يدوي</button>}
+      {item.actions.refresh && <button type="button" className="secondary" disabled={refreshing || item.tracking?.state === "pending"}
+        onClick={() => void refreshTracking()}>تحديث الآن</button>}
       {item.actions.receive && <button type="button" onClick={() => setAction("receipt")}>{item.status === "returned" ? "استلام المرتجع" : "تأكيد الاستلام"}</button>}
       <button type="button" className="secondary" onClick={onClose}>إغلاق التفاصيل</button>
     </div>}
@@ -192,12 +219,23 @@ export function Shipments() {
   useEffect(() => {
     if (!selected) return
     let current = true
-    request(`${path}/${selected}`).then(async (response) => {
-      if (!response.ok) throw new Error()
-      const shipment = shipmentDetailSchema.parse(await response.json())
-      if (current) setDetail(shipment)
-    }).catch(() => { if (current) setError(unavailable) })
-    return () => { current = false }
+    let retry: ReturnType<typeof setTimeout> | undefined
+    async function load(attempt = 0) {
+      try {
+        const response = await request(`${path}/${selected}`)
+        if (!response.ok) throw new Error()
+        const shipment = shipmentDetailSchema.parse(await response.json())
+        if (!current) return
+        setDetail(shipment)
+        setError("")
+        if (shipment.tracking?.state === "pending" && attempt < 12) retry = setTimeout(() => void load(attempt + 1), 3000)
+        else if (attempt) list.refresh()
+      } catch {
+        if (current) setError(unavailable)
+      }
+    }
+    void load()
+    return () => { current = false; clearTimeout(retry) }
   }, [selected, version])
 
   function show(id?: string) {

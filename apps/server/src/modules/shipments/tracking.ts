@@ -1,10 +1,23 @@
+import { shipmentStatus, trackingNumberSchema } from "@rawmat/shared"
 import type { ShipmentStatus } from "@rawmat/shared"
+import { z } from "zod"
 
 export type TrackingEvent = { status: ShipmentStatus; code: string; description: string; location: string; occurredAt: number }
-export type TrackingResult = { awb: string; events: TrackingEvent[] }
+const carrierEvent = z.strictObject({
+  status: shipmentStatus.nullable(), code: z.string().min(1).max(80).regex(/^[A-Za-z0-9_.:-]+$/),
+  description: z.string().trim().min(1).max(500), location: z.string().trim().max(120),
+  occurredAt: z.number().int().min(0).max(8_640_000_000_000_000),
+  raw: z.string().max(8192).optional(),
+})
+export const trackingResultSchema = z.strictObject({ awb: trackingNumberSchema, events: z.array(carrierEvent).max(100) })
+export type TrackingResult = z.infer<typeof trackingResultSchema>
 
 export interface TrackingProvider {
-  track(awbs: string[]): Promise<TrackingResult[]>
+  track(awbs: string[], signal: AbortSignal): Promise<TrackingResult[]>
+}
+
+export function trackingFinished(status: ShipmentStatus, receivedAt: number | null) {
+  return receivedAt !== null || status === "delivered" || status === "returned"
 }
 
 export class ManualProvider implements TrackingProvider {

@@ -14,6 +14,7 @@ import { registerManagement } from "./modules/management/routes.js"
 import { registerAudit } from "./modules/management/audit.js"
 import { registerPurchases } from "./modules/purchases/routes.js"
 import { registerShipments } from "./modules/shipments/routes.js"
+import type { TrackingProvider } from "./modules/shipments/tracking.js"
 
 const csp = [
   "default-src 'none'",
@@ -35,7 +36,8 @@ export function buildApp(
   appUrl: URL,
   webRoot: string,
   logger = true,
-  auth?: AuthOptions & { trustProxy: string | false; brandingRoot?: string },
+  auth?: AuthOptions & { trustProxy: string | false; brandingRoot?: string;
+    shipmentTracking?: { provider: TrackingProvider; intervalMs?: number } },
 ) {
   const app = Fastify({
     logger,

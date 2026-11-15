@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterAll, beforeAll, expect, test } from "vitest"
+import { afterAll, beforeAll, expect, test, vi } from "vitest"
 import { buildApp } from "../src/app.js"
 import { readServerConfig } from "../src/config.js"
 import { openDatabase } from "../src/db/database.js"
@@ -11,6 +11,7 @@ import { hashPassword } from "../src/modules/auth/passwords.js"
 import { ManualProvider } from "../src/modules/shipments/tracking.js"
 
 const origin = "https://rawmat.example.invalid"
+const config = readServerConfig({ APP_URL: origin })
 const headers = { host: "rawmat.example.invalid", origin }
 const password = "shipment browser fixture"
 const db = openDatabase(":memory:")
@@ -50,7 +51,6 @@ beforeAll(async () => {
     categoryId: categoryId!, unitId: unitId!, minimumQuantity: 0 }).run()
   db.db.insert(stockMovements).values({ id: randomUUID(), branchId: sourceId!, materialId: materialId!, quantity: "5",
     kind: "fixture", referenceId: randomUUID(), referenceItemId: randomUUID(), referenceRevision: 1, occurredAt: 1 }).run()
-  const config = readServerConfig({ APP_URL: origin })
   app = buildApp(config.appUrl, root, false, { config, db: db.db, trustProxy: false, now: () => 1_800_000_000_000 })
   const passwordHash = await hashPassword(password)
   for (const [account, branchId] of [["sender", sourceId], ["recipient", destinationId], ["unrelated", unrelatedId]] as const) {
@@ -85,6 +85,8 @@ test("registers once, tracks by hand and closes with the quantities confirmed by
   expect((await get("recipient", path + "/tracking/" + trackingNumber)).json()).toEqual({ id })
   const tracked = (await get("sender", url)).json()
   expect(tracked).toMatchObject({ status: "registered", revision: 1, actions: { update: true, receive: false } })
+  expect(tracked.tracking).toBeNull()
+  expect((await post("sender", url + "/refresh", {})).statusCode).toBe(404)
   const itemIds: string[] = tracked.items.map(({ id }: { id: string }) => id)
   const updating = { status: "in_transit", revision: 1, location: "مركز الفرز", description: "غادرت الشعبة" }
   expect((await post("unrelated", url + "/tracking", updating)).statusCode).toBe(404)
@@ -129,4 +131,31 @@ test("confirms returned contents at the source and uses a network-free tracking 
   expect((await post("sender", url + "/receipt", input)).statusCode).toBe(204)
   expect((await get("sender", url)).json()).toMatchObject({ status: "returned", receivedAt: expect.any(Number) })
   expect(await new ManualProvider().track(["DUMMY22002"])).toEqual([{ awb: "DUMMY22002", events: [] }])
+})
+
+test("queues a provider refresh through the authenticated API while shipment registration stays independent", async () => {
+  const awb = "SYNTHETIC33"
+  const now = 1_800_000_000_000
+  const track = vi.fn(async (numbers: string[]) => numbers.map((number) => ({ awb: number, events: [] })))
+  const auto = buildApp(config.appUrl, root, false, { config, db: db.db, trustProxy: false, now: () => now,
+    shipmentTracking: { provider: { track } } })
+  const request = (account: string, url: string, payload?: object) => auto.inject({ url,
+    method: payload ? "POST" : "GET", headers: { ...headers, cookie: cookies.get(account) ?? "" }, payload })
+  try {
+    const created = await request("sender", path, { ...shipment, trackingNumber: awb,
+      items: [{ kind: "description", description: "Fixture", quantity: 1 }] })
+    expect(created.statusCode).toBe(201)
+    const url = path + "/" + created.json().id
+    await vi.waitFor(async () => {
+      expect((await request("sender", url)).json().tracking).toEqual({ state: "idle", lastPolledAt: now })
+    })
+    expect((await request("unrelated", url + "/refresh", {})).statusCode).toBe(404)
+    expect((await request("sender", url + "/refresh", {})).statusCode).toBe(202)
+    const limited = await request("recipient", url + "/refresh", {})
+    expect(limited.statusCode).toBe(429)
+    expect(limited.headers["retry-after"]).toBe("120")
+    await vi.waitFor(() => expect(track).toHaveBeenCalledTimes(2))
+  } finally {
+    await auto.close()
+  }
 })

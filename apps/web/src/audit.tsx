@@ -25,6 +25,7 @@ const actions: Record<string, string> = {
   purchase_receipt: "تسجيل استلام",
   shipment_created: "تسجيل شحنة",
   shipment_tracking_updated: "تحديث تتبع شحنة",
+  shipment_tracking_synced: "مزامنة تتبع شحنة",
   shipment_received: "تأكيد استلام شحنة",
   reference_created: "إضافة سجل مرجعي",
   reference_updated: "تعديل سجل مرجعي",
