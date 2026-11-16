@@ -38,7 +38,11 @@ test("selects only manual or official Aramex tracking and requires a configured 
   expect(() => readServerConfig({ ...env, ARAMEX_PASSWORD: "" })).toThrow()
   expect(() => readServerConfig({ ...env, ARAMEX_STATUS_MAP: '{"bad code":"delivered"}' })).toThrow()
   expect(() => readServerConfig({ ...env, ARAMEX_EVENT_UTC_OFFSET: "+14:30" })).toThrow()
-  expect(readServerConfig(env)).toMatchObject({ aramex: { utcOffset: "+03:00" }, trackingIntervalMs: 3_600_000 })
+  expect(() => readServerConfig({ ...env, ARAMEX_ENVIRONMENT: "https://example.invalid" })).toThrow()
+  expect(() => readServerConfig({ ...env, ARAMEX_PROTOCOL: "http" })).toThrow()
+  expect(readServerConfig(env)).toMatchObject({
+    aramex: { environment: "production", protocol: "soap", utcOffset: "+03:00" }, trackingIntervalMs: 3_600_000,
+  })
 })
 
 test("sends the documented SOAP request and normalizes only recognized carrier events", async () => {
@@ -48,7 +52,7 @@ test("sends the documented SOAP request and normalizes only recognized carrier e
   const provider = createAramexProvider(readAramexConfig(env), http)
   const results = await provider.track([awb, "TEST00002"], signal)
   expect(http).toHaveBeenCalledWith("https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc", expect.objectContaining({
-    method: "POST", redirect: "error", signal,
+    method: "POST", redirect: "manual", signal,
     headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '"' + contract + 'Service_1_0/TrackShipments"' },
     body: expect.stringContaining("<Password>fixture &amp; &lt;value&gt;</Password>"),
   }))
@@ -71,12 +75,54 @@ test("rejects faults, excessive or unsafe XML, and unexpected waybills and skips
     const http = vi.fn<typeof fetch>().mockResolvedValue(new Response(body))
     return createAramexProvider(readAramexConfig(env), http).track(requested, signal)
   }
-  await expect(use('<s:Envelope xmlns:s="' + soap + '"><s:Body><s:Fault /></s:Body></s:Envelope>')).rejects.toThrow(/fault/)
+  await expect(use('<s:Envelope xmlns:s="' + soap + '"><s:Body><s:Fault /></s:Body></s:Envelope>'))
+    .rejects.toMatchObject({ reason: "rejected" })
   await expect(use(response("").replace(">false<", ">true<"))).rejects.toThrow()
   await expect(use('<!DOCTYPE ignored []>' + response(""))).rejects.toThrow()
-  await expect(use(response(" ".repeat(1_100_000)))).rejects.toThrow(/size limit/)
+  await expect(use(response(" ".repeat(1_100_000)))).rejects.toMatchObject({ reason: "format" })
   await expect(use(response(item("TEST99999", "")))).rejects.toThrow()
   await expect(use(response(item(awb, "") + item(awb, "")))).rejects.toThrow()
   await expect(use(response(item(awb, event("TEST99999", "OK", "Delivered")) + item("TEST00002", "")), [awb, "TEST00002"]))
     .resolves.toEqual([{ awb: "TEST00002", events: [] }])
+})
+
+test("uses the official UAT request shape and reads WCF JSON dates without applying the offset twice", async () => {
+  const occurredAt = Date.parse("2026-11-14T12:00:00Z")
+  const http = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+    HasErrors: false, TrackingResults: [
+      { Key: awb, Value: [{
+        WaybillNumber: awb, UpdateCode: "FIXTURE_TRANSIT", UpdateDateTime: "/Date(" + occurredAt + "+0300)/",
+        UpdateDescription: "In transit", UpdateLocation: null, Comments: "Omit this field",
+      }] },
+      { Key: "TEST00002", Value: null },
+    ],
+  }))
+  const config = readAramexConfig({ ...env, ARAMEX_ENVIRONMENT: "uat" })
+  const results = await createAramexProvider(config, http).track([awb, "TEST00002"], signal)
+  expect(http).toHaveBeenCalledWith("https://ws.uat.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments",
+    expect.objectContaining({ method: "POST", redirect: "manual", signal,
+      headers: { "Content-Type": "application/json; charset=utf-8", Accept: "application/json" } }))
+  expect(JSON.parse(String(http.mock.calls[0]?.[1]?.body))).toEqual({
+    ClientInfo: config.clientInfo, Shipments: [awb, "TEST00002"],
+    GetLastTrackingUpdateOnly: false, GetUpdateTimeZone: true, LabelInfo: null,
+  })
+  expect(results).toEqual([{ awb, events: [expect.objectContaining({ occurredAt, status: "in_transit", location: "" })] }])
+  expect(JSON.stringify(results)).not.toContain("Omit this field")
+})
+
+test("reports HTTP rejection and invalid JSON without disclosing the response body or following redirects", async () => {
+  const config = readAramexConfig({ ...env, ARAMEX_PROTOCOL: "json" })
+  const http = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response("private rejection body", { status: 403 }))
+    .mockResolvedValueOnce(Response.redirect("https://example.invalid"))
+    .mockResolvedValueOnce(Response.json({ HasErrors: true, Notifications: ["private rejection body"] }))
+    .mockResolvedValueOnce(new Response("<html>private rejection body</html>"))
+  const provider = createAramexProvider(config, http)
+  await expect(provider.track([awb], signal)).rejects.toMatchObject({
+    reason: "http", status: 403, message: "Aramex tracking request failed",
+  })
+  await expect(provider.track([awb], signal)).rejects.toMatchObject({ reason: "http", status: 302 })
+  await expect(provider.track([awb], signal)).rejects.toMatchObject({ reason: "rejected" })
+  await expect(provider.track([awb], signal)).rejects.toMatchObject({ reason: "format" })
+  expect(http).toHaveBeenCalledTimes(4)
 })

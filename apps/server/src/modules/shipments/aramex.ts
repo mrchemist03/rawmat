@@ -5,7 +5,8 @@ import { z } from "zod"
 import { trackingResultSchema } from "./tracking.js"
 import type { TrackingProvider, TrackingResult } from "./tracking.js"
 
-const endpoint = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc"
+const hosts = { production: "ws.aramex.net", uat: "ws.uat.aramex.net" } as const
+const trackingPath = "/ShippingAPI.V2/Tracking/Service_1_0.svc"
 const soap = "http://schemas.xmlsoap.org/soap/envelope/"
 const aramex = "http://ws.aramex.net/ShippingAPI/v1/"
 const arrays = "http://schemas.microsoft.com/2003/10/Serialization/Arrays"
@@ -15,6 +16,7 @@ const codePattern = /^[A-Z0-9_.:-]{1,80}$/
 const offsetPattern = /^[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00)$/
 const dateWithOffset = z.iso.datetime({ offset: true })
 const localDate = z.iso.datetime({ local: true })
+const wcfDate = /^\/Date\((-?\d{1,16})(?:[+-]\d{4})?\)\/$/
 
 export type AramexConfig = {
   clientInfo: {
@@ -26,6 +28,8 @@ export type AramexConfig = {
     AccountEntity: string
     AccountCountryCode: string
   }
+  environment: keyof typeof hosts
+  protocol: "json" | "soap"
   utcOffset?: string
   statusMap: Record<string, ShipmentStatus>
 }
@@ -34,6 +38,10 @@ const credential = z.string().min(1).max(256).refine((value) =>
   value.trim().length > 0 && !/[\x00-\x1f\x7f]/u.test(value))
 
 export function readAramexConfig(env: NodeJS.ProcessEnv): AramexConfig {
+  const environment = env.ARAMEX_ENVIRONMENT || "production"
+  if (environment !== "production" && environment !== "uat") throw new Error("Invalid ARAMEX_ENVIRONMENT")
+  const protocol = env.ARAMEX_PROTOCOL || (environment === "uat" ? "json" : "soap")
+  if (protocol !== "json" && protocol !== "soap") throw new Error("Invalid ARAMEX_PROTOCOL")
   const clientInfo = z.object({
     UserName: credential, Password: credential, Version: z.string().regex(/^v\d{1,2}(?:\.\d{1,2})?$/i),
     AccountNumber: z.string().regex(/^\d{1,32}$/), AccountPin: credential,
@@ -55,7 +63,7 @@ export function readAramexConfig(env: NodeJS.ProcessEnv): AramexConfig {
       throw new Error("Invalid ARAMEX_STATUS_MAP")
     }
   }
-  return { clientInfo: clientInfo.data, utcOffset, statusMap }
+  return { clientInfo: clientInfo.data, environment, protocol, utcOffset, statusMap }
 }
 
 const xmlEscapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }
@@ -126,8 +134,15 @@ const descriptions = new Map<string, ShipmentStatus>([
   ["returned to sender", "returned"], ["shipment returned to sender", "returned"], ["تم الإرجاع إلى المرسل", "returned"],
 ])
 
-function trackingEvent(row: Element, awb: string, config: AramexConfig) {
-  const field = (name: string) => one(row, aramex, name)?.text.trim() ?? ""
+const eventFields = ["WaybillNumber", "UpdateCode", "UpdateDescription", "UpdateLocation", "UpdateDateTime", "UpdateTimeZone"] as const
+const aramexEvent = z.object({
+  WaybillNumber: z.string(), UpdateCode: z.string(), UpdateDateTime: z.string(),
+  UpdateDescription: z.string().nullish(), UpdateLocation: z.string().nullish(), UpdateTimeZone: z.string().nullish(),
+})
+type AramexEvent = z.infer<typeof aramexEvent>
+
+function trackingEvent(row: AramexEvent, awb: string, config: AramexConfig) {
+  const field = (name: typeof eventFields[number]) => row[name]?.trim() ?? ""
   const waybill = trackingNumberSchema.safeParse(field("WaybillNumber"))
   const code = field("UpdateCode").toUpperCase()
   const description = field("UpdateDescription")
@@ -137,39 +152,72 @@ function trackingEvent(row: Element, awb: string, config: AramexConfig) {
   const offset = offsetPattern.test(reportedOffset) ? reportedOffset : config.utcOffset
   const qualified = dateWithOffset.safeParse(timestamp).success ? timestamp :
     offset && localDate.safeParse(timestamp).success ? timestamp + offset : ""
-  if (!waybill.success || waybill.data !== awb || !codePattern.test(code) || !qualified) throw new Error("Invalid tracking event")
+  const epoch = wcfDate.exec(timestamp)?.[1]
+  const occurredAt = epoch === undefined ? Date.parse(qualified) : Number(epoch)
+  if (!waybill.success || waybill.data !== awb || !codePattern.test(code) || !Number.isSafeInteger(occurredAt)) {
+    throw new Error("Invalid tracking event")
+  }
   const normalized = description.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").replace(/[.!。]+$/u, "").trim()
   const status = Object.hasOwn(config.statusMap, code) ? config.statusMap[code]! : descriptions.get(normalized) ?? null
   return {
     status, code, description: description.slice(0, 500) || code, location: location.slice(0, 120),
-    occurredAt: Date.parse(qualified),
+    occurredAt,
     raw: JSON.stringify({ code, timestamp, timezone: field("UpdateTimeZone").slice(0, 64) }),
   }
 }
 
-function trackingResponse(xml: string, requested: string[], config: AramexConfig) {
+type Entry = { Key: unknown; Value?: unknown[] | null }
+const jsonResponse = z.object({
+  HasErrors: z.boolean().optional(),
+  TrackingResults: z.array(z.object({ Key: z.string(), Value: z.array(z.unknown()).nullish() })).max(20).nullish(),
+})
+
+export class AramexTrackingError extends Error {
+  constructor(readonly reason: "timeout" | "connection" | "http" | "rejected" | "format", readonly status?: number) {
+    super("Aramex tracking request failed")
+  }
+}
+
+function soapEntries(xml: string): Entry[] {
   const root = parseXml(xml)
   if (root?.local !== "Envelope" || root.uri !== soap) throw new Error("Invalid SOAP envelope")
   const body = one(root, soap, "Body")
-  if (one(body, soap, "Fault")) throw new Error("Aramex SOAP fault")
+  if (one(body, soap, "Fault")) throw new AramexTrackingError("rejected")
   const response = one(body, aramex, "ShipmentTrackingResponse")
   const hasErrors = one(response, aramex, "HasErrors")?.text.trim()
   const dictionary = one(response, aramex, "TrackingResults")
+  if (hasErrors === "true" || hasErrors === "1") throw new AramexTrackingError("rejected")
   if (!dictionary || dictionary.nil || (hasErrors !== undefined && hasErrors !== "false" && hasErrors !== "0")) {
-    throw new Error("Aramex tracking request failed")
+    throw new AramexTrackingError("format")
   }
+  return children(dictionary, arrays, "KeyValueOfstringArrayOfTrackingResultmFAkxlpY").map((item) => {
+    const value = one(item, arrays, "Value")
+    return {
+      Key: one(item, arrays, "Key")?.text,
+      Value: !value || value.nil ? null : children(value, aramex, "TrackingResult").map((row) =>
+        Object.fromEntries(eventFields.map((name) => [name, one(row, aramex, name)?.text]))),
+    }
+  })
+}
+
+function jsonEntries(text: string): Entry[] {
+  const response = jsonResponse.parse(JSON.parse(text))
+  if (response.HasErrors) throw new AramexTrackingError("rejected")
+  if (!response.TrackingResults) throw new AramexTrackingError("format")
+  return response.TrackingResults
+}
+
+function normalizeEntries(entries: Entry[], requested: string[], config: AramexConfig) {
   const seen = new Set<string>()
   const results: TrackingResult[] = []
-  for (const item of children(dictionary, arrays, "KeyValueOfstringArrayOfTrackingResultmFAkxlpY")) {
-    const key = trackingNumberSchema.safeParse(one(item, arrays, "Key")?.text)
-    if (!key.success || !requested.includes(key.data) || seen.has(key.data)) throw new Error("Unexpected Aramex tracking number")
+  for (const { Key, Value } of entries) {
+    const key = trackingNumberSchema.safeParse(Key)
+    if (!key.success || !requested.includes(key.data) || seen.has(key.data)) throw new AramexTrackingError("format")
     const awb = key.data
     seen.add(awb)
-    const value = one(item, arrays, "Value")
-    if (!value || value.nil) continue
+    if (!Value) continue
     try {
-      const rows = children(value, aramex, "TrackingResult")
-      const events = rows.map((row) => trackingEvent(row, awb, config))
+      const events = Value.map((row) => trackingEvent(aramexEvent.parse(row), awb, config))
         .sort((first, second) => second.occurredAt - first.occurredAt).slice(0, 100)
       results.push(trackingResultSchema.parse({ awb, events }))
     } catch {
@@ -180,9 +228,13 @@ function trackingResponse(xml: string, requested: string[], config: AramexConfig
 }
 
 async function readResponse(response: Response) {
-  if (!response.ok || !response.body || Number(response.headers.get("content-length")) > responseLimit) {
+  if (!response.ok) {
     await response.body?.cancel()
-    throw new Error("Aramex tracking request failed")
+    throw new AramexTrackingError("http", response.status)
+  }
+  if (!response.body || Number(response.headers.get("content-length")) > responseLimit) {
+    await response.body?.cancel()
+    throw new AramexTrackingError("format")
   }
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -193,7 +245,7 @@ async function readResponse(response: Response) {
     length += value.byteLength
     if (length > responseLimit) {
       await reader.cancel()
-      throw new Error("Aramex response exceeds size limit")
+      throw new AramexTrackingError("format")
     }
     chunks.push(value)
   }
@@ -201,15 +253,31 @@ async function readResponse(response: Response) {
 }
 
 export function createAramexProvider(config: AramexConfig, fetchResponse = fetch): TrackingProvider {
+  const json = config.protocol === "json"
+  const endpoint = "https://" + hosts[config.environment] + trackingPath + (json ? "/json/TrackShipments" : "")
   return {
     async track(awbs, signal) {
       const numbers = z.array(trackingNumberSchema).min(1).max(20).parse(awbs)
-      const response = await fetchResponse(endpoint, {
-        method: "POST", redirect: "error", signal,
-        headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '"' + aramex + 'Service_1_0/TrackShipments"' },
-        body: requestBody(config, numbers),
-      })
-      return trackingResponse(await readResponse(response), numbers, config)
+      let text: string
+      try {
+        const response = await fetchResponse(endpoint, {
+          method: "POST", redirect: "manual", signal,
+          headers: json ? { "Content-Type": "application/json; charset=utf-8", Accept: "application/json" } :
+            { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '"' + aramex + 'Service_1_0/TrackShipments"' },
+          body: json ? JSON.stringify({ ClientInfo: config.clientInfo, Shipments: numbers,
+            GetLastTrackingUpdateOnly: false, GetUpdateTimeZone: true, LabelInfo: null }) : requestBody(config, numbers),
+        })
+        text = await readResponse(response)
+      } catch (error) {
+        if (error instanceof AramexTrackingError) throw error
+        throw new AramexTrackingError(signal.aborted ? "timeout" : "connection")
+      }
+      try {
+        return normalizeEntries(json ? jsonEntries(text) : soapEntries(text), numbers, config)
+      } catch (error) {
+        if (error instanceof AramexTrackingError) throw error
+        throw new AramexTrackingError("format")
+      }
     },
   }
 }
