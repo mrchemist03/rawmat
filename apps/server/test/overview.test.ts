@@ -153,3 +153,14 @@ test("the ordinary account reads the overview and CSV even when the cost table i
   expect((await get("/api/overview", "basic")).statusCode).toBe(200)
   expect((await get("/api/overview/export", "basic")).statusCode).toBe(200)
 })
+
+test("limits repeated overview calculations without consuming the export quota", async () => {
+  db.run(sql`DELETE FROM login_attempts`)
+  for (let count = 0; count < 60; count++) {
+    expect((await get("/api/overview", "basic")).statusCode).toBe(200)
+  }
+  const limited = await get("/api/overview", "basic")
+  expect(limited.statusCode).toBe(429)
+  expect(limited.headers["retry-after"]).toBe("60")
+  expect((await get("/api/overview/export", "basic")).statusCode).toBe(200)
+})

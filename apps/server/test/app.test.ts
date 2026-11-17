@@ -55,6 +55,8 @@ describe("server foundation", () => {
     expect(response.headers["content-security-policy"]).not.toContain("unsafe-inline")
     expect(response.headers["x-content-type-options"]).toBe("nosniff")
     expect(response.headers["referrer-policy"]).toBe("no-referrer")
+    expect(response.headers["permissions-policy"]).toBe("camera=(), microphone=(), geolocation=()")
+    expect(response.headers["strict-transport-security"]).toBe("max-age=31536000")
     expect((await app.inject({ url: "/assets/app.js", headers })).statusCode).toBe(200)
     expect((await app.inject({ url: "/other.html", headers })).statusCode).toBe(404)
     expect((await app.inject({ url: "/api/future", headers })).statusCode).toBe(404)
@@ -65,6 +67,18 @@ describe("server foundation", () => {
 
     expect(response.statusCode).toBe(400)
     expect(response.json()).toEqual({ error: "bad_request" })
+    expect(response.headers["strict-transport-security"]).toBeUndefined()
+  })
+
+  test("keeps local HTTP available without HSTS", async () => {
+    const local = buildApp(readAppUrl("http://127.0.0.1:8080"), webRoot, false)
+    try {
+      const response = await local.inject({ url: "/healthz", headers: { host: healthHost } })
+      expect(response.statusCode).toBe(200)
+      expect(response.headers["strict-transport-security"]).toBeUndefined()
+    } finally {
+      await local.close()
+    }
   })
 
   test("requires the configured origin on writes", async () => {

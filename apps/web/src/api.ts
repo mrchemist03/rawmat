@@ -50,6 +50,9 @@ export async function request(url: string, body?: unknown, method = "POST", sign
 export async function rejection(response: Response) {
   const body: unknown = await response.json().catch(() => null)
   if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
+    if (body.error === "rate_limited" && response.headers.get("Retry-After") === "60") {
+      return "محاولات كثيرة. انتظر دقيقة قبل المحاولة مجددًا."
+    }
     return Object.hasOwn(messages, body.error) ? messages[body.error] ?? unavailable : unavailable
   }
   return unavailable

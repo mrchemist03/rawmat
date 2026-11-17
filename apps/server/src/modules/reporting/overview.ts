@@ -86,6 +86,9 @@ export function registerOverview(app: FastifyInstance, auth: AuthAccess, options
       }
       if (!noQuery.safeParse(request.query).success) return reply.code(400).send({ error: "invalid_input" })
       if (exporting && !allowExport(auth, principal.id, request, reply)) return
+      if (!exporting && !auth.reserveOverview(principal.id, request)) {
+        return reply.header("Retry-After", "60").code(429).send({ error: "rate_limited" })
+      }
       const overview = readOverview(options.db, (options.now ?? Date.now)(), can(principal.role, "viewCosts"))
       return exporting ? sendCsv(reply, "overview.csv", ["القسم", "المؤشر", "القيمة", "الوحدة أو العملة"], overviewRows(overview)) : overview
     })

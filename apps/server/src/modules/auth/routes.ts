@@ -189,6 +189,11 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions) {
         keyed("export-actor", actorId), keyed("export-address", clientAddress(request)), now(), 20, 60_000,
       )
     },
+    reserveOverview(actorId: string, request: FastifyRequest) {
+      return repository.reserveLoginAttempt(
+        keyed("overview-actor", actorId), keyed("overview-address", clientAddress(request)), now(), 60, 60_000,
+      )
+    },
     async hashTemporaryPassword(password: string) {
       if (pendingPasswords >= 2) return
       pendingPasswords += 1

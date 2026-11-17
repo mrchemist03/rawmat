@@ -58,8 +58,12 @@ export function buildApp(
       .header("X-Content-Type-Options", "nosniff")
       .header("Referrer-Policy", "no-referrer")
       .header("X-Frame-Options", "DENY")
+      .header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 
     const host = request.headers.host?.toLowerCase()
+    if (host === appUrl.host && appUrl.protocol === "https:") {
+      reply.header("Strict-Transport-Security", "max-age=31536000")
+    }
     // The container probe uses the actual socket peer and a literal URL.
     const localProbe = request.method === "GET" &&
       request.raw.url === "/healthz" &&

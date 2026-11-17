@@ -60,6 +60,19 @@ jobs:
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/notifications)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/overview/export)" = 404
 
+      - name: Restore a live SQLite snapshot in a separate volume
+        shell: bash
+        run: |
+          compose=(docker compose -f deploy/compose.dev.yml)
+          export LOCAL_PORT=18081
+          recovery=(docker compose -p rawmat-restore-check -f deploy/compose.dev.yml)
+          snapshot="$(LOCAL_PORT=8080 "${compose[@]}" exec -T app /nodejs/bin/node apps/server/dist/cli/database-backup.js create)"
+          LOCAL_PORT=8080 "${compose[@]}" cp "app:$snapshot" "$RUNNER_TEMP/rawmat-snapshot.sqlite"
+          "${recovery[@]}" run --rm --no-deps -T --entrypoint /nodejs/bin/node app \
+            apps/server/dist/cli/database-backup.js restore < "$RUNNER_TEMP/rawmat-snapshot.sqlite"
+          "${recovery[@]}" up -d --wait --wait-timeout 30
+          test "$(curl --fail --silent --show-error http://127.0.0.1:18081/healthz)" = '{"status":"ok"}'
+
       - name: Scan locked dependencies and the image, and generate an SBOM
         shell: bash
         run: |
@@ -87,4 +100,6 @@ jobs:
 
       - name: Remove test containers
         if: always()
-        run: docker compose -f deploy/compose.dev.yml down --volumes
+        run: |
+          LOCAL_PORT=18081 docker compose -p rawmat-restore-check -f deploy/compose.dev.yml down --volumes
+          docker compose -f deploy/compose.dev.yml down --volumes
