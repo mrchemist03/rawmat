@@ -106,3 +106,25 @@ test("releases unfinished work on shutdown for the next process", async () => {
   await second.run()
   expect(shipment().lastPolledAt).toBe(time)
 })
+
+test("a tracking response for the previous number cannot change a corrected shipment", async () => {
+  const corrected = "FIXTURE002"
+  const { promise, resolve } = Promise.withResolvers<TrackingResult[]>()
+  const occurrence = { status: "in_transit" as const, code: "TRANSIT", description: "Fixture", location: "",
+    occurredAt: milestone - 10 }
+  const track = vi.fn<TrackingProvider["track"]>().mockReturnValueOnce(promise)
+    .mockResolvedValueOnce([{ awb: corrected, events: [occurrence] }])
+  const worker = createTrackingPoller(stored.db, { track }, () => time)
+  const pending = worker.run()
+  expect(track).toHaveBeenCalledWith([awb], expect.any(AbortSignal))
+  expect(repo.edit({ ...actor, manage: true }, id, { sourceId: actor.branchId, destinationId: destination,
+    trackingNumber: corrected, revision: 1, dispatchedOn: "2026-11-10",
+    items: [{ kind: "description", description: "Documents", quantity: 1 }] })).toBe("tracking_changed")
+  resolve([{ awb, events: [occurrence] }])
+  await pending
+  expect(shipment()).toMatchObject({ trackingNumber: corrected, status: "registered", revision: 2, lastPolledAt: null })
+  await worker.run()
+  expect(track).toHaveBeenLastCalledWith([corrected], expect.any(AbortSignal))
+  expect(shipment()).toMatchObject({ status: "in_transit", revision: 3 })
+  expect(repo.detail(actor, id)?.lastEvent.status).toBe("in_transit")
+})

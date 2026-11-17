@@ -28,17 +28,26 @@ function emptyItem(key: number): Item {
   return { key, kind: "material", description: "", quantity: "" }
 }
 
-function ShipmentEditor({ onClose, onSaved }: {
-  onClose: () => void; onSaved: (id: string, duplicate: boolean) => void
+function ShipmentEditor({ initial, onClose, onSaved }: {
+  initial?: ShipmentDetail; onClose: () => void; onSaved: (id: string, duplicate: boolean) => void
 }) {
-  const editor = useEditor(path, undefined, async (response) => {
+  const editor = useEditor(path, initial?.id, async (response) => {
+    if (initial) return onSaved(initial.id, false)
     onSaved(shipmentIdSchema.parse(await response.json()).id, response.status === 200)
   })
-  const [source, setSource] = useState<ReferenceOption>()
-  const [destination, setDestination] = useState<ReferenceOption>()
-  const [items, setItems] = useState([emptyItem(0)])
-  const [nextKey, setNextKey] = useState(1)
-  const [trackingNumber, setTrackingNumber] = useState("")
+  const editData = initial?.edit
+  const [source, setSource] = useState<ReferenceOption | undefined>(initial && editData
+    ? { id: editData.sourceId, name: initial.sourceName } : undefined)
+  const [destination, setDestination] = useState<ReferenceOption | undefined>(initial && editData
+    ? { id: editData.destinationId, name: initial.destinationName } : undefined)
+  const [items, setItems] = useState<Item[]>(() => initial && editData ? initial.items.map((item, key) => {
+    const materialId = editData.materialIds[key]
+    return { key, quantity: item.quantity, ...(materialId
+      ? { kind: "material", material: { id: materialId, name: item.name }, description: "" }
+      : { kind: "description", description: item.name }) }
+  }) : [emptyItem(0)])
+  const [nextKey, setNextKey] = useState(initial?.items.length ?? 1)
+  const [trackingNumber, setTrackingNumber] = useState(initial?.trackingNumber ?? "")
   const [opening, setOpening] = useState(false)
 
   async function openExisting() {
@@ -74,21 +83,23 @@ function ShipmentEditor({ onClose, onSaved }: {
       })),
     })
     if (!parsed.success) return editor.setError("تحقّق من رقم التتبع والشعبتين والكميات، واختر كل مادة مرة واحدة.")
-    void editor.save(parsed.data)
+    void editor.save(initial ? { ...parsed.data, revision: initial.revision } : parsed.data)
   }
 
   return <section className="editor">
-    <h2>إضافة شحنة أراميكس</h2>
+    <h2>{initial ? "تعديل بيانات الشحنة" : "إضافة شحنة أراميكس"}</h2>
     <form onSubmit={submit}>
       <label>رقم التتبع<input name="trackingNumber" dir="ltr" autoComplete="off" minLength={5} maxLength={32}
         value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} disabled={opening}
         pattern="[A-Za-z0-9]{5,32}" required /></label>
-      <div className="actions"><button type="button" className="secondary" disabled={opening || editor.busy}
-        onClick={() => void openExisting()}>فتح شحنة مسجّلة</button></div>
+      {!initial && <div className="actions"><button type="button" className="secondary" disabled={opening || editor.busy}
+        onClick={() => void openExisting()}>فتح شحنة مسجّلة</button></div>}
+      {initial && trackingNumber.trim().toUpperCase() !== initial.trackingNumber &&
+        <p role="status">سيبدأ التتبع من جديد للرقم المصحّح.</p>}
       <Lookup label="شعبة المصدر" endpoint={path + "/branches"} schema={purchaseBranchListSchema} value={source} select={setSource} />
       <Lookup label="شعبة الوجهة" endpoint={path + "/branches"} schema={purchaseBranchListSchema}
         value={destination} select={setDestination} />
-      <label>تاريخ الإرسال<input name="dispatchedOn" type="date" required /></label>
+      <label>تاريخ الإرسال<input name="dispatchedOn" type="date" defaultValue={initial?.dispatchedOn} required /></label>
       <fieldset className="purchase-items">
         <legend>محتويات الشحنة</legend>
         {items.map((item, index) => <div key={item.key} className="purchase-item">
@@ -151,7 +162,9 @@ function ShipmentAction({ item, action, onClose, onSaved }: {
   </form>
 }
 
-function ShipmentDetails({ item, onClose, changed }: { item: ShipmentDetail; onClose: () => void; changed: (message: string) => void }) {
+function ShipmentDetails({ item, onClose, onEdit, changed }: {
+  item: ShipmentDetail; onClose: () => void; onEdit: () => void; changed: (message: string) => void
+}) {
   const [action, setAction] = useState<"tracking" | "receipt">()
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState("")
@@ -186,6 +199,7 @@ function ShipmentDetails({ item, onClose, changed }: { item: ShipmentDetail; onC
     {action && <ShipmentAction item={item} action={action} onClose={() => setAction(undefined)}
       onSaved={() => changed(action === "tracking" ? "تم تحديث حالة الشحنة." : "تم تأكيد استلام الشحنة.")} />}
     {!action && <div className="actions purchase-actions">
+      {item.edit && <button type="button" onClick={onEdit}>تعديل الشحنة</button>}
       {item.actions.update && <button type="button" onClick={() => setAction("tracking")}>تحديث يدوي</button>}
       {item.actions.refresh && <button type="button" className="secondary" disabled={refreshing || item.tracking?.state === "pending"}
         onClick={() => void refreshTracking()}>تحديث الآن</button>}
@@ -208,13 +222,14 @@ export function Shipments() {
   if (status) filters.set("status", status)
   const list = useCollection(path, shipmentListSchema, filters.toString())
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<ShipmentDetail>()
   const [selected, setSelected] = useState<string>()
   const [detail, setDetail] = useState<ShipmentDetail>()
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
   const [version, setVersion] = useState(0)
   useEffect(() => {
-    if (!selected) return
+    if (!selected || editing) return
     let current = true
     let retry: ReturnType<typeof setTimeout> | undefined
     async function load(attempt = 0) {
@@ -233,10 +248,11 @@ export function Shipments() {
     }
     void load()
     return () => { current = false; clearTimeout(retry) }
-  }, [selected, version])
+  }, [selected, version, editing])
 
   function show(id?: string) {
     setCreating(false)
+    setEditing(undefined)
     setSelected(id)
     setDetail(undefined)
     setError("")
@@ -245,6 +261,7 @@ export function Shipments() {
   }
 
   function changed(message: string) {
+    setEditing(undefined)
     setDetail(undefined)
     setError("")
     setNotice(message)
@@ -265,7 +282,10 @@ export function Shipments() {
       list.setPage(1)
       list.refresh()
     }} />}
-    {detail && <ShipmentDetails key={`${detail.id}:${detail.revision}`} item={detail} onClose={() => show()} changed={changed} />}
+    {editing && <ShipmentEditor initial={editing} onClose={() => setEditing(undefined)}
+      onSaved={() => changed("تم حفظ تعديل الشحنة.")} />}
+    {detail && !editing && <ShipmentDetails key={`${detail.id}:${detail.revision}`} item={detail}
+      onClose={() => show()} onEdit={() => setEditing(detail)} changed={changed} />}
     {selected && !detail && !error && <p role="status">جارٍ تحميل الشحنة…</p>}
     <div className="catalogue-filters">
       <label><span id="shipment-status-filter">الحالة</span><select aria-labelledby="shipment-status-filter" value={status}

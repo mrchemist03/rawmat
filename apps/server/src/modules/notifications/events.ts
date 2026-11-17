@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { NotificationEvent, NotificationType, PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
-import { and, asc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, like, lt, lte, notInArray, sql } from "drizzle-orm"
 import type { AppDatabase } from "../../db/database.js"
 import { notificationOutbox, notificationRecipients, notificationRules, purchaseRequests, shipments } from "../../db/schema.js"
 
@@ -64,9 +64,18 @@ export function publishShipment(db: Connection, row: { id: string; trackingNumbe
     message, data: { awb, status } })
 }
 
+export function discardShipmentNotices(db: Pick<AppDatabase, "delete">, id: string, trackingNumber: string) {
+  db.delete(notificationOutbox).where(and(
+    inArray(notificationOutbox.state, ["pending", "failed"]),
+    like(notificationOutbox.dedupeKey, "shipment.%:" + id + ":%"),
+    sql`json_extract(${notificationOutbox.data}, '$.awb') = ${trackingNumber}`,
+  )).run()
+}
+
 export function publishLowStock(db: Connection, material: { id: string; code: string; name: string },
-  shipmentId: string, branch: string, time: number) {
-  publish(db, { event: "inventory.low", dedupeKey: "inventory.low:" + shipmentId + ":" + material.id, occurredAt: time,
+  shipmentId: string, branch: string, time: number, revision = 1) {
+  const dedupeKey = "inventory.low:" + shipmentId + ":" + material.id + (revision === 1 ? "" : ":" + revision)
+  publish(db, { event: "inventory.low", dedupeKey, occurredAt: time,
     message: "انخفض مخزون " + material.name + " عن الحد الأدنى في " + branch,
     data: { materialCode: material.code, branch } })
 }

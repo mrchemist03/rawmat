@@ -124,8 +124,9 @@ export function createNotificationWorker(db: AppDatabase, delivery: Notification
   }
 
   async function complete(job: Job & { leaseUntil: number }, shutdown?: AbortSignal) {
-    const failure = await deliver(job, shutdown)
     const where = and(eq(notificationOutbox.id, job.id), eq(notificationOutbox.leaseUntil, job.leaseUntil))
+    if (!db.select({ id: notificationOutbox.id }).from(notificationOutbox).where(and(where, pending)).get()) return
+    const failure = await deliver(job, shutdown)
     if (shutdown?.aborted && failure) {
       db.update(notificationOutbox).set({ leaseUntil: null }).where(where).run()
       return

@@ -43,6 +43,7 @@ const actions: Record<string, string> = {
   purchase_cancelled: "إلغاء طلب شراء",
   purchase_receipt: "تسجيل استلام",
   shipment_created: "تسجيل شحنة",
+  shipment_edited: "تعديل بيانات شحنة",
   shipment_tracking_updated: "تحديث تتبع شحنة",
   shipment_tracking_synced: "مزامنة تتبع شحنة",
   notification_recipient_saved: "حفظ مستلم تنبيهات",

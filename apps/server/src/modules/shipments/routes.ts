@@ -1,5 +1,5 @@
 import {
-  listQuerySchema, purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
+  listQuerySchema, purchaseBranchListSchema, shipmentDetailSchema, shipmentEditSchema, shipmentIdSchema, shipmentInputSchema,
   shipmentListSchema, shipmentQuerySchema, shipmentReceiptSchema, shipmentStatusLabels, shipmentUpdateSchema,
   trackingNumberSchema,
 } from "@rawmat/shared"
@@ -35,8 +35,8 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
   const notFound = (reply: FastifyReply) => reply.code(404).send({ error: "not_found" })
   const invalid = (reply: FastifyReply) => reply.code(400).send({ error: "invalid_input" })
 
-  function authorize(request: FastifyRequest, reply: FastifyReply, write = false) {
-    const permission = write ? "createOperations" : "viewWorkspace"
+  function authorize(request: FastifyRequest, reply: FastifyReply,
+    permission: "viewWorkspace" | "createOperations" | "manageRecords" = "viewWorkspace") {
     const session = auth.principal(request)
     if (!session || session.mustChangePassword || !can(session.role, permission)) {
       notFound(reply)
@@ -47,7 +47,7 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
       notFound(reply)
       return
     }
-    if (write && !auth.reserveManagementWrite(current.id, request)) {
+    if (permission !== "viewWorkspace" && !auth.reserveManagementWrite(current.id, request)) {
       reply.header("Retry-After", "900").code(429).send({ error: "rate_limited" })
       return
     }
@@ -106,7 +106,7 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
   })
 
   app.post("/api/shipments", { bodyLimit: 131_072 }, async (request, reply) => {
-    const actor = authorize(request, reply, true)
+    const actor = authorize(request, reply, "createOperations")
     if (!actor) return
     const input = shipmentInputSchema.safeParse(request.body)
     if (!input.success) return invalid(reply)
@@ -117,8 +117,21 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
       .code(result.duplicate ? 200 : 201).send(shipmentIdSchema.parse({ id: result.id }))
   })
 
+  app.put("/api/shipments/:id", { bodyLimit: 131_072 }, async (request, reply) => {
+    const actor = authorize(request, reply, "manageRecords")
+    if (!actor) return
+    const params = shipmentIdSchema.safeParse(request.params)
+    if (!params.success) return notFound(reply)
+    const input = shipmentEditSchema.safeParse(request.body)
+    if (!input.success) return invalid(reply)
+    const result = repository.edit(actor, params.data.id, input.data)
+    if (result !== "tracking_changed") return finish(reply, result)
+    if (poller) setImmediate(() => void poll())
+    return reply.code(204).send()
+  })
+
   app.post("/api/shipments/:id/tracking", { bodyLimit: 8_192 }, async (request, reply) => {
-    const actor = authorize(request, reply, true)
+    const actor = authorize(request, reply, "createOperations")
     if (!actor) return
     const params = shipmentIdSchema.safeParse(request.params)
     if (!params.success) return notFound(reply)
@@ -128,7 +141,7 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
   })
 
   app.post("/api/shipments/:id/refresh", { bodyLimit: 1024 }, async (request, reply) => {
-    const actor = authorize(request, reply, true)
+    const actor = authorize(request, reply, "createOperations")
     if (!actor) return
     const params = shipmentIdSchema.safeParse(request.params)
     if (!params.success) return notFound(reply)
@@ -142,7 +155,7 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
   })
 
   app.post("/api/shipments/:id/receipt", { bodyLimit: 65_536 }, async (request, reply) => {
-    const actor = authorize(request, reply, true)
+    const actor = authorize(request, reply, "createOperations")
     if (!actor) return
     const params = shipmentIdSchema.safeParse(request.params)
     if (!params.success) return notFound(reply)

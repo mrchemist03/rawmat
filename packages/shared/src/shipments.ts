@@ -14,13 +14,15 @@ const item = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("description"), description: z.string().trim().min(1).max(250), quantity }),
 ])
 
-export const shipmentInputSchema = z.strictObject({
+const shipmentFields = z.strictObject({
   trackingNumber: trackingNumberSchema, sourceId: z.uuid(), destinationId: z.uuid(), dispatchedOn: z.iso.date(),
   items: z.array(item).min(1).max(100).refine((items) => {
     const ids = items.flatMap((row) => row.kind === "material" ? [row.materialId] : [])
     return new Set(ids).size === ids.length
   }),
-}).refine((row) => row.sourceId !== row.destinationId)
+})
+export const shipmentInputSchema = shipmentFields.refine((row) => row.sourceId !== row.destinationId)
+export const shipmentEditSchema = shipmentFields.extend({ revision }).refine((row) => row.sourceId !== row.destinationId)
 
 export const shipmentUpdateSchema = z.strictObject({
   revision, status: shipmentStatus.exclude(["registered"]), location: z.string().trim().max(120),
@@ -45,6 +47,10 @@ const summary = z.strictObject({
 export const shipmentListSchema = z.strictObject({ items: z.array(summary), total: z.number().int() })
 export const shipmentDetailSchema = summary.extend({
   revision, events: z.array(eventSchema),
+  edit: z.strictObject({
+    sourceId: z.uuid(), destinationId: z.uuid(),
+    materialIds: z.array(z.uuid().nullable()),
+  }).nullable(),
   tracking: z.strictObject({
     state: z.enum(["idle", "pending", "retrying", "stalled", "finished"]),
     lastPolledAt: z.number().int().nullable(),
@@ -58,6 +64,7 @@ export const shipmentDetailSchema = summary.extend({
 export const shipmentIdSchema = z.strictObject({ id: z.uuid() })
 
 export type ShipmentInput = z.infer<typeof shipmentInputSchema>
+export type ShipmentEdit = z.infer<typeof shipmentEditSchema>
 export type ShipmentQuery = z.infer<typeof shipmentQuerySchema>
 export type ShipmentUpdate = z.infer<typeof shipmentUpdateSchema>
 export type ShipmentReceipt = z.infer<typeof shipmentReceiptSchema>

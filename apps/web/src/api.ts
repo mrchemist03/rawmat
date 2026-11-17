@@ -1,4 +1,5 @@
 const messages: Record<string, string> = {
+  duplicate_tracking_number: "رقم التتبع مسجّل لشحنة أخرى.",
   invalid_credentials: "تحقّق من اسم الدخول وكلمة المرور.",
   invalid_password: "اختر كلمة مرور مختلفة طولها 12 حرفًا على الأقل.",
   invalid_input: "تحقّق من الحقول وأعد المحاولة.",

@@ -45,7 +45,8 @@ export function createTrackingPoller(db: AppDatabase, provider: TrackingProvider
 
   function settle(job: PollClaim, result: TrackingResult | undefined, time: number) {
     db.transaction((tx) => {
-      const row = tx.select().from(shipments).where(and(eq(shipments.id, job.id), eq(shipments.pollLeaseUntil, job.lease))).get()
+      const row = tx.select().from(shipments).where(and(eq(shipments.id, job.id),
+        eq(shipments.trackingNumber, job.trackingNumber), eq(shipments.pollLeaseUntil, job.lease))).get()
       if (!row) return
       if (trackingFinished(row.status, row.receivedAt)) {
         tx.update(shipments).set({ pollLeaseUntil: null }).where(eq(shipments.id, row.id)).run()
@@ -122,7 +123,8 @@ export function createTrackingPoller(db: AppDatabase, provider: TrackingProvider
     for (const job of jobs) {
       if (shutdown?.aborted) {
         db.update(shipments).set({ pollLeaseUntil: null })
-          .where(and(eq(shipments.id, job.id), eq(shipments.pollLeaseUntil, job.lease))).run()
+          .where(and(eq(shipments.id, job.id), eq(shipments.trackingNumber, job.trackingNumber),
+            eq(shipments.pollLeaseUntil, job.lease))).run()
       } else settle(job, results.get(job.trackingNumber), now())
     }
   }

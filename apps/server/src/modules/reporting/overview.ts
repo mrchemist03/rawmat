@@ -1,6 +1,6 @@
 import { auditActionLabel, formatMinor, overviewSchema, purchaseStatus, purchaseStatusLabels } from "@rawmat/shared"
 import type { Overview } from "@rawmat/shared"
-import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, ne, notInArray, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
@@ -10,6 +10,7 @@ import { can } from "../auth/permissions.js"
 import type { AuthAccess, AuthOptions } from "../auth/routes.js"
 import { countLowStock } from "../inventory/repository.js"
 import { readMonthlySpending } from "../purchases/costs.js"
+import { supersededTrackingSource } from "../shipments/tracking.js"
 import { allowExport, sendCsv } from "./csv.js"
 
 const day = 86_400_000
@@ -36,6 +37,7 @@ function readOverview(db: AppDatabase, now: number, viewCosts: boolean): Overvie
       time: sql<number>`min(${trackingEvents.occurredAt})`.as("delivered_at") }).from(trackingEvents)
       .innerJoin(shipments, eq(shipments.id, trackingEvents.shipmentId))
       .where(and(eq(trackingEvents.status, "delivered"), eq(shipments.status, "delivered"),
+        ne(trackingEvents.source, supersededTrackingSource),
         gte(trackingEvents.occurredAt, sql`unixepoch(${shipments.dispatchedOn}) * 1000`),
         lte(trackingEvents.occurredAt, now))).groupBy(trackingEvents.shipmentId).as("first_delivery")
     const deliveredThisMonth = tx.select({ total: count() }).from(delivery)

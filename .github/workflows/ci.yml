@@ -149,6 +149,8 @@ jobs:
       attestations: write
     env:
       IMAGE: ghcr.io/mrchemist03/rawmat
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -166,18 +168,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          docker load --input "$RUNNER_TEMP/release-image/rawmat-image.tar"
+          archive="$RUNNER_TEMP/release-image/rawmat-image.tar"
+          config_path="$(tar -xOf "$archive" manifest.json | jq -er 'if length == 1 then .[0].Config else error("Expected one image") end')"
+          [[ "$config_path" =~ ^(blobs/sha256/[a-f0-9]{64}|[a-f0-9]{64}\.json)$ ]]
+          config_digest="sha256:$(tar -xOf "$archive" "$config_path" | sha256sum | cut -d ' ' -f 1)"
+          docker load --input "$archive"
           image_id="$(cat "$RUNNER_TEMP/release-image/rawmat-image-id.txt")"
           test "$(docker image inspect --format '{{.Id}}' rawmat:dev)" = "$image_id"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' rawmat:dev)" = "$GITHUB_SHA"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          candidate="$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          candidate_tag="build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          candidate="$IMAGE:$candidate_tag"
           docker image tag rawmat:dev "$candidate"
-          docker push "$candidate"
-          digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$candidate")"
+          docker push --platform linux/amd64 "$candidate" | tee "$RUNNER_TEMP/rawmat-image-push.log"
+          digest="$(awk -v tag="$candidate_tag:" '$1 == tag && $2 == "digest:" { print $3 }' "$RUNNER_TEMP/rawmat-image-push.log")"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          registry_id="$(docker buildx imagetools inspect --raw "$IMAGE@$digest" | jq -er '.config.digest')"
-          test "$registry_id" = "$image_id"
+          registry_config="$(docker buildx imagetools inspect --raw "$IMAGE@$digest" | jq -r '.config.digest')"
+          if [[ "$registry_config" != "$config_digest" ]]; then
+            printf 'Registry image config %s differs from the tested archive config %s\n' "$registry_config" "$config_digest" >&2
+            exit 1
+          fi
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
       - name: Sign image provenance
@@ -197,6 +207,12 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
+      - name: Sign the loadable archive and its SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release-image/rawmat-image.tar
+          sbom-path: ${{ runner.temp }}/release-sbom/rawmat-image.cdx.json
+
       - name: Verify both signatures and publish the version tag
         shell: bash
         env:
@@ -205,9 +221,10 @@ jobs:
         run: |
           subject="oci://$IMAGE@$IMAGE_DIGEST"
           policy=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"
-            --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners --bundle-from-oci)
-          gh attestation verify "$subject" "${policy[@]}"
-          gh attestation verify "$subject" "${policy[@]}" --predicate-type https://cyclonedx.org/bom
+            --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners)
+          gh attestation verify "$subject" "${policy[@]}" --bundle-from-oci
+          gh attestation verify "$subject" "${policy[@]}" --bundle-from-oci --predicate-type https://cyclonedx.org/bom
+          gh attestation verify "$RUNNER_TEMP/release-image/rawmat-image.tar" "${policy[@]}" --predicate-type https://cyclonedx.org/bom
           version="$IMAGE:$GITHUB_REF_NAME"
           if existing="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$version" 2>&1)"; then
             test "$existing" = "$IMAGE_DIGEST"
@@ -223,3 +240,42 @@ jobs:
       - name: Sign out of the registry
         if: always()
         run: docker logout ghcr.io
+
+  publish-release:
+    needs: [verify, publish-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rawmat-release-image
+          path: ${{ runner.temp }}/release-image
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rawmat-sbom
+          path: ${{ runner.temp }}/release-sbom
+      - name: Publish the signed release and CycloneDX inventory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.publish-image.outputs.digest }}
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          archive="$RUNNER_TEMP/release-image/rawmat-image.tar"
+          gzip -n -c "$archive" > "$RUNNER_TEMP/rawmat-image-linux-amd64.tar.gz"
+          notes="$RUNNER_TEMP/rawmat-release-notes.md"
+          cat > "$notes" <<EOF
+          صورة Rawmat الموقّعة لـ Linux ‏amd64.
+
+          - بصمة الصورة ghcr.io/mrchemist03/rawmat@$IMAGE_DIGEST
+          - بصمة الالتزام $GITHUB_SHA
+          - [طريقة التحقق من التوقيع وتشغيل الصورة](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/deploy/release.md)
+          - [فحوص الإصدار](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+
+          يتوفر أرشيف الصورة وقائمة مكوّناتها أدناه.
+          EOF
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Rawmat $GITHUB_REF_NAME" --notes-file "$notes" \
+            "$RUNNER_TEMP/rawmat-image-linux-amd64.tar.gz" "$RUNNER_TEMP/release-sbom/rawmat-image.cdx.json"

@@ -20,6 +20,8 @@ export function trackingFinished(status: ShipmentStatus, receivedAt: number | nu
   return receivedAt !== null || status === "delivered" || status === "returned"
 }
 
+export const supersededTrackingSource = "superseded"
+
 export class ManualProvider implements TrackingProvider {
   async track(awbs: string[]): Promise<TrackingResult[]> {
     return awbs.map((awb) => ({ awb, events: [] }))

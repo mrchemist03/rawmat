@@ -6,7 +6,7 @@ import { afterAll, beforeAll, expect, test, vi } from "vitest"
 import { buildApp } from "../src/app.js"
 import { readServerConfig } from "../src/config.js"
 import { openDatabase } from "../src/db/database.js"
-import { auditLog, branches, categories, materials, stockMovements, units, users } from "../src/db/schema.js"
+import { auditLog, branches, categories, materials, notificationOutbox, stockMovements, units, users } from "../src/db/schema.js"
 import { hashPassword } from "../src/modules/auth/passwords.js"
 import { ManualProvider } from "../src/modules/shipments/tracking.js"
 
@@ -31,9 +31,9 @@ function get(account: string, url: string) {
   return app.inject({ url, headers: cookie ? { ...headers, cookie } : headers })
 }
 
-function post(account: string, url: string, payload: unknown) {
+function post(account: string, url: string, payload: unknown, method: "POST" | "PUT" = "POST") {
   const cookie = cookies.get(account)
-  return app.inject({ method: "POST", url, headers: { ...headers, "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+  return app.inject({ method, url, headers: { ...headers, "content-type": "application/json", ...(cookie ? { cookie } : {}) },
     payload: JSON.stringify(payload) })
 }
 
@@ -53,8 +53,9 @@ beforeAll(async () => {
     kind: "fixture", referenceId: randomUUID(), referenceItemId: randomUUID(), referenceRevision: 1, occurredAt: 1 }).run()
   app = buildApp(config.appUrl, root, false, { config, db: db.db, trustProxy: false, now: () => 1_800_000_000_000 })
   const passwordHash = await hashPassword(password)
-  for (const [account, branchId] of [["sender", sourceId], ["recipient", destinationId], ["unrelated", unrelatedId]] as const) {
-    db.db.insert(users).values({ id: randomUUID(), name: account, loginName: account, role: "user", branchId: branchId!,
+  for (const [account, branchId, role] of [["sender", sourceId, "user"], ["recipient", destinationId, "user"],
+    ["unrelated", unrelatedId, "user"], ["administrator", null, "admin"], ["manager", null, "superuser"]] as const) {
+    db.db.insert(users).values({ id: randomUUID(), name: account, loginName: account, role, branchId: branchId ?? null,
       passwordHash, mustChangePassword: false }).run()
     const response = await app.inject({ method: "POST", url: "/api/auth/login", headers, payload: { loginName: account, password } })
     expect(response.statusCode).toBe(200)
@@ -158,4 +159,59 @@ test("queues a provider refresh through the authenticated API while shipment reg
   } finally {
     await auto.close()
   }
+})
+
+test("only a superuser can correct an unreceived shipment, with atomic stock and tracking changes", async () => {
+  const input = { ...shipment, trackingNumber: "DUMMY44004",
+    items: [{ kind: "material", materialId, quantity: 1 }, { kind: "description", description: "Fixture", quantity: 1 }] }
+  const created = await post("sender", path, input)
+  expect(created.statusCode).toBe(201)
+  const { id } = created.json()
+  const url = path + "/" + id
+  const edit = (account: string, payload: unknown) => post(account, url, payload, "PUT")
+  for (const account of ["sender", "administrator"]) {
+    expect((await get(account, url)).json().edit).toBeNull()
+    expect((await edit(account, { ...input, revision: 1 })).statusCode).toBe(404)
+  }
+  expect((await edit("signed-out", { ...input, revision: 1 })).statusCode).toBe(404)
+  expect((await get("manager", url)).json().edit).toEqual({ sourceId, destinationId, materialIds: [materialId, null] })
+  expect((await post("sender", url + "/tracking", { revision: 1, status: "delivered", location: "",
+    description: "Fixture before correction" })).statusCode).toBe(204)
+
+  const moved = { ...input, sourceId: unrelatedId, revision: 2, dispatchedOn: "2026-11-11",
+    items: [{ kind: "material", materialId, quantity: 3 }, { kind: "description", description: "Revised fixture", quantity: 2 }] }
+  expect((await edit("manager", { ...moved, trackingNumber })).json()).toEqual({ error: "duplicate_tracking_number" })
+  expect((await edit("manager", moved)).json()).toEqual({ error: "insufficient_stock" })
+  expect((await get("manager", url)).json()).toMatchObject({ revision: 2, sourceName: "المصدر" })
+  expect(db.db.select().from(stockMovements).all().filter(({ referenceId }) => referenceId === id)).toHaveLength(1)
+  db.db.insert(stockMovements).values({ id: randomUUID(), branchId: unrelatedId!, materialId: materialId!, quantity: "4",
+    kind: "fixture", referenceId: randomUUID(), referenceItemId: randomUUID(), referenceRevision: 1, occurredAt: 1 }).run()
+  expect((await edit("manager", moved)).statusCode).toBe(204)
+  expect((await edit("manager", moved)).json()).toEqual({ error: "stale_shipment" })
+  const corrected = (await get("manager", url)).json()
+  expect(corrected).toMatchObject({ revision: 3, sourceName: "شعبة أخرى", status: "delivered",
+    lastEvent: { description: "Fixture before correction" }, items: [{ quantity: "3" }, { quantity: "2" }] })
+  expect(db.db.select().from(stockMovements).all().filter(({ referenceId }) => referenceId === id)
+    .map(({ branchId, quantity }) => [branchId, quantity])).toEqual([[sourceId, "-1"], [sourceId, "1"], [unrelatedId, "-3"]])
+
+  const number = "DUMMY44005"
+  const oldNotice = randomUUID()
+  db.db.insert(notificationOutbox).values({ id: oldNotice, event: "shipment.delivered", dedupeKey: "shipment.delivered:" + id + ":2",
+    occurredAt: 1, nextAttemptAt: 1, message: "Fixture notice", data: { awb: input.trackingNumber }, recipients: [] }).run()
+  expect((await edit("manager", { ...moved, revision: 3, trackingNumber: number })).statusCode).toBe(204)
+  expect(db.db.select().from(notificationOutbox).all().some(({ id }) => id === oldNotice)).toBe(false)
+  expect((await get("manager", path + "/tracking/" + input.trackingNumber)).statusCode).toBe(404)
+  expect((await get("manager", path + "/tracking/" + number)).json()).toEqual({ id })
+  const reset = (await get("manager", url)).json()
+  expect(reset).toMatchObject({ status: "registered", revision: 4, lastEvent: { description: "صُحّح رقم التتبع" },
+    events: [{ status: "registered" }] })
+  expect((await post("recipient", url + "/receipt", { revision: 4,
+    items: reset.items.map((item: { id: string; quantity: string }) => ({ itemId: item.id, quantity: item.quantity })),
+  })).statusCode).toBe(204)
+  expect((await get("manager", url)).json().edit).toBeNull()
+  expect((await edit("manager", { ...moved, revision: 5, trackingNumber: number })).json()).toEqual({ error: "shipment_closed" })
+  const audits = db.db.select().from(auditLog).all().filter(({ entityId, action }) => entityId === id && action === "shipment_edited")
+  expect(audits).toHaveLength(2)
+  expect(audits[1]?.before?.trackingNumber).toBe(input.trackingNumber)
+  expect(audits[1]?.after?.trackingNumber).toBe(number)
 })

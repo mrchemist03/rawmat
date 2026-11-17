@@ -7,13 +7,13 @@
 انسخ بصمة الصورة ووسم الإصدار من صفحة الإصدار نفسها. استعمل GitHub CLI للتحقق من هوية المستودع وسير العمل ووسم المصدر، ومن وجود قائمتي التوقيع على بصمة الصورة.
 
 ```bash
-tag='v0.1.0'
+tag='v0.1.1'
 image='ghcr.io/mrchemist03/rawmat@sha256:REPLACE_WITH_RELEASE_DIGEST'
 policy=(--repo mrchemist03/rawmat
   --signer-workflow mrchemist03/rawmat/.github/workflows/ci.yml
-  --source-ref "refs/tags/$tag" --deny-self-hosted-runners --bundle-from-oci)
-gh attestation verify "oci://$image" "${policy[@]}"
-gh attestation verify "oci://$image" "${policy[@]}" --predicate-type https://cyclonedx.org/bom
+  --source-ref "refs/tags/$tag" --deny-self-hosted-runners)
+gh attestation verify "oci://$image" "${policy[@]}" --bundle-from-oci &&
+gh attestation verify "oci://$image" "${policy[@]}" --bundle-from-oci --predicate-type https://cyclonedx.org/bom
 ```
 
 يمكن تمرير بصمة الالتزام من صفحة الإصدار أيضًا عبر `--source-digest`. بعد نجاح الفحصين، اضبط `APP_IMAGE` في ملف بيئة التشغيل على مرجع الصورة الكامل الذي يحتوي على `@sha256:`. خذ نسخة احتياطية متسقة ثم اسحب الصورة وشغّلها بملفات البيئة المعتادة.
@@ -23,6 +23,19 @@ docker compose --env-file deploy/.env -f deploy/compose.yml pull app
 docker compose --env-file deploy/.env -f deploy/compose.yml up -d --wait
 ```
 
+## التثبيت من ملف الإصدار
+
+يمكن تنزيل `rawmat-image-linux-amd64.tar.gz` من صفحة الإصدار والتحقق من الأرشيف الموقّع وقائمة مكوّناته. تفيد هذه الطريقة عند تعذّر الوصول إلى سجل الحاويات. نفّذ من Bash مع ضبط `tag` و`policy` كما في المثال أعلاه.
+
+```bash
+gzip -dc rawmat-image-linux-amd64.tar.gz > rawmat-image.tar &&
+gh attestation verify rawmat-image.tar "${policy[@]}" --predicate-type https://cyclonedx.org/bom &&
+docker load --input rawmat-image.tar &&
+docker tag rawmat:dev "rawmat:$tag"
+```
+
+بعد نجاح التحقق والتحميل، اضبط `APP_IMAGE=rawmat:v0.1.1` أو استخدم الوسم الذي نزّلته. شغّل أمر `docker compose ... up -d --wait` الوارد أعلاه.
+
 ## نشر إصدار جديد
 
-بعد تحديث رقم النسخة في ملفات الحزم والقفل ونجاح CI على `main`، ادفع وسمًا بصيغة `vMAJOR.MINOR.PATCH` يطابق رقم حزمة المشروع. يتولى سير العمل إعادة الفحوص ونشر الصورة الموقّعة إلى GitHub Container Registry. بعد نجاحه، سجّل بصمة الصورة وبصمة الالتزام في صفحة إصدار GitHub.
+بعد تحديث رقم النسخة في حزمة المشروع وملف القفل ودفع الالتزام إلى `main`، ادفع وسمًا بصيغة `vMAJOR.MINOR.PATCH` يطابق رقم حزمة المشروع. يتولى سير العمل إجراء الفحوص ونشر الصورة إلى GitHub Container Registry، ثم نشر صفحة إصدار تحمل بصمة الصورة وبصمة الالتزام والأرشيف وقائمة المكونات.
