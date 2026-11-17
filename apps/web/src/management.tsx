@@ -36,8 +36,11 @@ export function useCollection<R extends Result>(path: string, schema: { parse(in
     setPage(1)
     setSearch(value)
   }, [])
+  const exportQuery = new URLSearchParams(filters)
+  if (search) exportQuery.set("search", search)
   return {
     result, error, page, setPage, search: updateSearch,
+    exportQuery: exportQuery.toString(),
     refresh() { refresh((value) => value + 1) },
   }
 }

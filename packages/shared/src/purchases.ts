@@ -4,6 +4,10 @@ import { listQuerySchema } from "./management.js"
 export const purchaseStatus = z.enum([
   "draft", "submitted", "approved", "rejected", "ordered", "partially_received", "received", "cancelled",
 ])
+export const purchaseStatusLabels: Record<z.infer<typeof purchaseStatus>, string> = {
+  draft: "مسودة", submitted: "مُرسل", approved: "معتمد", rejected: "مرفوض",
+  ordered: "تم الطلب", partially_received: "مُستلم جزئيًا", received: "مُستلم", cancelled: "ملغى",
+}
 
 export const purchaseInputSchema = z.strictObject({
   branchId: z.uuid(),
@@ -20,6 +24,15 @@ export const purchaseUpdateSchema = purchaseInputSchema.extend({ revision })
 export const purchaseTransitionSchema = z.strictObject({ status: purchaseStatus, revision })
 export const purchaseCurrencySchema = z.string().trim().toUpperCase().refine((code) => currencies.has(code))
 const currencies = new Set(Intl.supportedValuesOf("currency"))
+export function currencyDigits(currency: string) {
+  return new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2
+}
+
+export function formatMinor(minor: string | number, currency: string) {
+  const digits = currencyDigits(currency)
+  const value = String(minor).padStart(digits + 1, "0")
+  return digits ? value.slice(0, -digits) + "." + value.slice(-digits) : value
+}
 const unitPrice = z.strictObject({
   itemId: z.uuid(), unitPriceMinor: z.number().int().min(0).max(1_000_000_000_000), currency: purchaseCurrencySchema,
 })

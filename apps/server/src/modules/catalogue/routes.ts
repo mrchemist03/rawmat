@@ -11,6 +11,7 @@ import { createCatalogueRepository } from "./repository.js"
 import { readMaterialsCsv } from "./csv.js"
 import { defaultThresholds } from "./similarity.js"
 import { materialBalances } from "../inventory/repository.js"
+import { allowExport, exportRowLimit, sendCsv } from "../reporting/csv.js"
 
 const idParams = z.strictObject({ id: z.uuid() })
 const archiveInput = z.strictObject({ archived: z.boolean() })
@@ -78,6 +79,18 @@ export function registerCatalogue(app: FastifyInstance, auth: AuthAccess, option
     if (!query.success) return reply.code(400).send({ error: "invalid_input" })
     const result = materialBalances(options.db, params.data.id, query.data.page ?? 1)
     return result ? materialStockSchema.parse(result) : finish(reply, "missing")
+  })
+
+  app.get("/api/materials/export", async (request, reply) => {
+    const actor = authorize(request, reply, "viewWorkspace")
+    if (!actor) return
+    const query = materialQuerySchema.safeParse(request.query)
+    if (!query.success) return reply.code(400).send({ error: "invalid_input" })
+    if (!allowExport(auth, actor.id, request, reply)) return
+    const { items } = repository.listMaterials({ ...query.data, page: 1 }, exportRowLimit + 1)
+    return sendCsv(reply, "materials.csv", ["الرمز", "المادة", "الفئة", "الوحدة", "المورد", "الحد الأدنى", "الحالة", "ملاحظات"],
+      items.map((item) => [item.code, item.name, item.categoryName, item.unitName, item.supplierName, item.minimumQuantity,
+        item.archived ? "مؤرشفة" : "فعّالة", item.notes]))
   })
 
   app.get("/api/materials/similarity", {

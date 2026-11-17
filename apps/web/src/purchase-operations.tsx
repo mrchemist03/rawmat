@@ -1,20 +1,10 @@
 import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
-import { purchaseCostsSchema, purchaseDecisionSchema, purchaseReceiptSchema } from "@rawmat/shared"
+import { currencyDigits, formatMinor, purchaseCostsSchema, purchaseDecisionSchema, purchaseReceiptSchema } from "@rawmat/shared"
 import type { PurchaseCosts, PurchaseDetail } from "@rawmat/shared"
 import { rejection, request, unavailable } from "./api"
 
 type Operation = "approved" | "rejected" | "ordered" | "cancelled" | "receive"
-
-function currencyDigits(currency: string) {
-  return new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2
-}
-
-function formatMinor(minor: string | number, currency: string) {
-  const digits = currencyDigits(currency)
-  const value = String(minor).padStart(digits + 1, "0")
-  return digits ? `${value.slice(0, -digits)}.${value.slice(-digits)}` : value
-}
 
 function toMinor(value: string, currency: string) {
   if (!/^\d+(?:\.\d+)?$/.test(value) || !/^[A-Z]{3}$/.test(currency)) return NaN

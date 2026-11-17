@@ -8,6 +8,7 @@ export * from "./audit.js"
 export * from "./purchases.js"
 export * from "./shipments.js"
 export * from "./notifications.js"
+export * from "./overview.js"
 
 export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),

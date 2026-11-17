@@ -1,13 +1,14 @@
 import {
   listQuerySchema, purchaseBranchListSchema, purchaseCostsSchema, purchaseDecisionSchema, purchaseDetailSchema,
   purchaseIdSchema, purchaseInputSchema, purchaseListSchema, purchaseQuerySchema, purchaseReceiptSchema,
-  purchaseTransitionSchema, purchaseUpdateSchema,
+  purchaseStatusLabels, purchaseTransitionSchema, purchaseUpdateSchema,
 } from "@rawmat/shared"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { can } from "../auth/permissions.js"
 import type { AuthAccess, AuthOptions } from "../auth/routes.js"
 import { createPurchaseRepository } from "./repository.js"
 import { readPurchaseCosts } from "./costs.js"
+import { allowExport, exportRowLimit, sendCsv } from "../reporting/csv.js"
 
 export function registerPurchases(app: FastifyInstance, auth: AuthAccess, options: AuthOptions) {
   const repository = createPurchaseRepository(options.db, options.now ?? Date.now)
@@ -57,6 +58,18 @@ export function registerPurchases(app: FastifyInstance, auth: AuthAccess, option
     const query = listQuerySchema.safeParse(request.query)
     if (!query.success) return invalid(reply)
     return purchaseBranchListSchema.parse(repository.listBranches(query.data.search ?? "", query.data.page ?? 1))
+  })
+
+  app.get("/api/purchases/export", async (request, reply) => {
+    const actor = authorize(request, reply)
+    if (!actor) return
+    const query = purchaseQuerySchema.safeParse(request.query)
+    if (!query.success) return invalid(reply)
+    if (!allowExport(auth, actor.id, request, reply)) return
+    const { items } = repository.list(actor, { ...query.data, page: 1 }, exportRowLimit + 1)
+    return sendCsv(reply, "purchases.csv", ["رقم الطلب", "الشعبة", "الطالب", "المورد", "تاريخ الحاجة", "الحالة", "وقت التسجيل (UTC)"],
+      items.map((item) => [item.number, item.branchName, item.requesterName, item.supplierName, item.neededOn,
+        purchaseStatusLabels[item.status], new Date(item.createdAt).toISOString()]))
   })
 
   app.get("/api/purchases/:id", async (request, reply) => {

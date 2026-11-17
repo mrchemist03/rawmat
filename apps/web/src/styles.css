@@ -1,4 +1,5 @@
 :root {
+  --line: #d8e5de;
   color: #142d2a;
   background: #eef4f1;
   font-family: Tajawal, system-ui, sans-serif;
@@ -75,6 +76,15 @@ form .secondary { margin-top: 0; }
 .surface > p { margin-top: 14px; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .section-heading h1 { margin: 0; }
+.overview-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; margin: 20px 0 0; }
+.overview-metrics > div { border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.overview-metrics dd, .overview-amount { margin: 6px 0 0; font-size: 1.65rem; font-weight: 700; }
+.overview-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 410px), 1fr)); gap: 16px; margin-top: 16px; align-items: start; }
+.overview-statuses > div, .overview-activity li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.overview-statuses dd { margin: 0; font-weight: 700; }
+.overview-activity { list-style: none; padding: 0; }
+.overview-activity time { font-size: .85rem; }
+.overview-spending + .overview-spending { border-top: 1px solid var(--line); margin-top: 16px; }
 .search { display: flex; align-items: end; gap: 10px; margin-block: 20px 16px; }
 .search label { width: min(100%, 320px); }
 .table-scroll { overflow-x: auto; }

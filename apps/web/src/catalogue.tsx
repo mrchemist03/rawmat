@@ -6,6 +6,7 @@ import {
 } from "@rawmat/shared"
 import type { LookupKind, MaterialView, ReferenceOption, SimilarityReport, SupplierInput } from "@rawmat/shared"
 import { EditorActions, Listing, useCollection, useEditor } from "./management"
+import { CsvExport } from "./csv-export"
 import { MaterialImport, matchLabel } from "./material-import"
 
 const materialPath = "/api/materials"
@@ -209,6 +210,7 @@ export function Materials() {
   return (
     <section className="surface">
       <div className="section-heading"><h1>المواد الأولية</h1>
+        <CsvExport endpoint={materialPath + "/export"} filename="materials.csv" query={data.exportQuery} />
         {actions?.create && <div className="actions">
           <button onClick={() => { setNotice(""); setChangingStatus(undefined); setMerging(undefined); setImporting(false); setEditing(null) }}>إضافة مادة</button>
           <button className="secondary" onClick={() => { setNotice(""); setChangingStatus(undefined); setMerging(undefined); setEditing(undefined); setImporting(true) }}>استيراد CSV</button>

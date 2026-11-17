@@ -1,53 +1,53 @@
-import { auditListSchema } from "@rawmat/shared"
+import { useState } from "react"
+import type { FormEvent } from "react"
+import { auditActionLabel, auditEntityLabels, auditListSchema, auditQuerySchema } from "@rawmat/shared"
+import { CsvExport } from "./csv-export"
 import { Listing, useCollection } from "./management"
-
-const actions: Record<string, string> = {
-  superuser_bootstrapped: "إنشاء الحساب الأول",
-  password_changed: "تغيير كلمة المرور",
-  branch_created: "إضافة شعبة",
-  branch_updated: "تعديل شعبة",
-  account_created: "إضافة حساب",
-  account_updated: "تعديل حساب",
-  material_created: "إضافة مادة",
-  material_updated: "تعديل مادة",
-  material_archived: "أرشفة مادة",
-  material_restored: "استعادة مادة",
-  material_similarity_confirmed: "تأكيد حفظ مادة مشابهة",
-  materials_merged: "دمج مادتين",
-  material_import: "استيراد مواد",
-  purchase_created: "إنشاء مسودة شراء",
-  purchase_updated: "تعديل مسودة شراء",
-  purchase_submitted: "إرسال طلب شراء",
-  purchase_approved: "اعتماد طلب شراء",
-  purchase_rejected: "رفض طلب شراء",
-  purchase_ordered: "تأكيد الشراء",
-  purchase_cancelled: "إلغاء طلب شراء",
-  purchase_receipt: "تسجيل استلام",
-  shipment_created: "تسجيل شحنة",
-  shipment_tracking_updated: "تحديث تتبع شحنة",
-  shipment_tracking_synced: "مزامنة تتبع شحنة",
-  notification_recipient_saved: "حفظ مستلم تنبيهات",
-  notification_rule_saved: "حفظ إعداد تنبيه",
-  shipment_received: "تأكيد استلام شحنة",
-  reference_created: "إضافة سجل مرجعي",
-  reference_updated: "تعديل سجل مرجعي",
-}
 
 const formatTime = new Intl.DateTimeFormat("ar-u-ca-gregory-nu-latn", {
   dateStyle: "medium", timeStyle: "medium", timeZone: "UTC",
 })
 
 export function Audit() {
-  const data = useCollection("/api/manage/audit", auditListSchema)
+  const [filters, setFilters] = useState("")
+  const [filterError, setFilterError] = useState("")
+  const data = useCollection("/api/manage/audit", auditListSchema, filters)
+  function filter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const query = new URLSearchParams()
+    for (const [key, value] of new FormData(event.currentTarget)) {
+      if (typeof value === "string" && value) query.set(key, value)
+    }
+    if (!auditQuerySchema.safeParse(Object.fromEntries(query)).success) {
+      setFilterError("تأكّد من ترتيب تاريخَي البداية والنهاية.")
+      return
+    }
+    setFilterError("")
+    data.setPage(1)
+    setFilters(query.toString())
+  }
   return <section className="surface">
-    <h1>سجل التدقيق</h1>
+    <div className="section-heading"><h1>سجل التدقيق</h1>
+      <CsvExport endpoint="/api/manage/audit/export" filename="audit.csv" query={data.exportQuery} /></div>
+    <form className="catalogue-filters" onSubmit={filter}>
+      <label>نوع السجل<select name="entity">
+        <option value="">جميع الأنواع</option>
+        {Object.entries(auditEntityLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select></label>
+      <label>من تاريخ (UTC)<input name="from" type="date" /></label>
+      <label>إلى تاريخ (UTC)<input name="to" type="date" /></label>
+      <button className="secondary" type="submit">تصفية</button>
+    </form>
+    {filterError && <p role="alert" className="error">{filterError}</p>}
     <Listing data={data}>
       {data.result?.items.length ? <div className="table-scroll"><table>
-        <thead><tr><th>التوقيت (UTC)</th><th>الاسم</th><th>الإجراء</th><th>التفاصيل</th></tr></thead>
+        <thead><tr><th scope="col">التوقيت (UTC)</th><th scope="col">الاسم</th><th scope="col">الإجراء</th>
+          <th scope="col">نوع السجل</th><th scope="col">التفاصيل</th></tr></thead>
         <tbody>{data.result.items.map((item) => <tr key={item.id}>
           <td><bdi>{formatTime.format(item.occurredAt)}</bdi></td>
           <td>{item.actorName ?? "النظام"}</td>
-          <td>{Object.hasOwn(actions, item.action) ? actions[item.action] : item.action}</td>
+          <td>{auditActionLabel(item.action)}</td>
+          <td>{Object.hasOwn(auditEntityLabels, item.entity) ? auditEntityLabels[item.entity as keyof typeof auditEntityLabels] : item.entity}</td>
           <td><details><summary>عرض التفاصيل</summary>
             <p>معرّف السجل <bdi>{item.entityId}</bdi></p>
             {item.before && <><p>قبل</p><pre dir="ltr">{JSON.stringify(item.before, null, 2)}</pre></>}

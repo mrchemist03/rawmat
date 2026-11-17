@@ -85,7 +85,7 @@ export function createCatalogueRepository(db: AppDatabase, now: () => number, th
   }
 
   return {
-    listMaterials({ search = "", page = 1, sort = "name", direction = "asc", status = "active", id }: MaterialQuery) {
+    listMaterials({ search = "", page = 1, sort = "name", direction = "asc", status = "active", id }: MaterialQuery, limit = pageSize) {
       const term = search.toLowerCase()
       const matches = sql`instr(lower(${materials.name}), ${term}) > 0 or instr(lower(${materials.code}), ${term}) > 0`
       const filter = and(matches, id ? eq(materials.id, id) : undefined,
@@ -95,7 +95,7 @@ export function createCatalogueRepository(db: AppDatabase, now: () => number, th
         .innerJoin(units, eq(units.id, materials.unitId))
         .leftJoin(suppliers, eq(suppliers.id, materials.supplierId))
         .where(filter).orderBy((direction === "desc" ? desc : asc)(sortColumns[sort]), asc(materials.id))
-        .limit(pageSize).offset((page - 1) * pageSize).all()
+        .limit(limit).offset((page - 1) * pageSize).all()
       const total = db.select({ value: count() }).from(materials).where(filter).get()?.value ?? 0
       return { items, total }
     },

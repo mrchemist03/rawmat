@@ -2,6 +2,10 @@ import { z } from "zod"
 import { listQuerySchema } from "./management.js"
 
 export const shipmentStatus = z.enum(["registered", "picked_up", "in_transit", "out_for_delivery", "delivered", "exception", "returned"])
+export const shipmentStatusLabels: Record<z.infer<typeof shipmentStatus>, string> = {
+  registered: "مسجّلة", picked_up: "استلمها الناقل", in_transit: "في الطريق", out_for_delivery: "خرجت للتوصيل",
+  delivered: "سُلّمت", exception: "مشكلة", returned: "مرتجعة",
+}
 export const trackingNumberSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{5,32}$/)
 const quantity = z.number().positive().max(1_000_000_000)
 const revision = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)

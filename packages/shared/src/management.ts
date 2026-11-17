@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { loginNameSchema, newPasswordSchema } from "./credentials.js"
 
-export const navigationItemSchema = z.enum(["account", "materials", "purchases", "shipments", "notifications", "accounts", "branches", "references", "audit"])
+export const navigationItemSchema = z.enum(["overview", "account", "materials", "purchases", "shipments", "notifications", "accounts", "branches", "references", "audit"])
 export const meSchema = z.strictObject({
   name: z.string(),
   navigation: z.array(navigationItemSchema),

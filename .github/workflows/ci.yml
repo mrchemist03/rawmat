@@ -58,6 +58,7 @@ jobs:
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/purchases)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/shipments)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/notifications)" = 404
+          test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/overview/export)" = 404
 
       - name: Scan locked dependencies and the image, and generate an SBOM
         shell: bash

@@ -20,7 +20,7 @@ export function can(role: AccountType, capability: Capability) {
 }
 
 export function navigationFor(role: AccountType): NavigationItem[] {
-  const result: NavigationItem[] = ["account"]
+  const result: NavigationItem[] = ["overview", "account"]
   if (can(role, "viewWorkspace")) result.push("materials", "purchases", "shipments")
   if (can(role, "manageNotifications")) result.push("notifications")
   if (can(role, "manageAccounts")) result.push("accounts")

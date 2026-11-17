@@ -10,6 +10,7 @@ import { Audit } from "./audit"
 import { Purchases } from "./purchases"
 import { Shipments } from "./shipments"
 import { Notifications } from "./notifications"
+import { Overview } from "./overview"
 import { Turnstile } from "./turnstile"
 
 type Session = z.infer<typeof sessionViewSchema>
@@ -185,7 +186,8 @@ function Account() {
 }
 
 const navigation: Record<NavigationItem, { path: string; title: string }> = {
-  account: { path: "/", title: "حسابي" },
+  overview: { path: "/", title: "النظرة العامة" },
+  account: { path: "/account", title: "حسابي" },
   materials: { path: "/materials", title: "المواد الأولية" },
   purchases: { path: "/purchases", title: "طلبات الشراء" },
   shipments: { path: "/shipments", title: "الشحنات" },
@@ -230,6 +232,7 @@ function Workspace({ onLogout, busy, error }: { onLogout: () => void; busy: bool
       </header>
       <main className="workspace">
         {error && <p className="error" role="alert">{error}</p>}
+        {current === "overview" && <Overview />}
         {current === "accounts" && <Accounts />}
         {current === "branches" && <Branches />}
         {current === "materials" && <Materials />}

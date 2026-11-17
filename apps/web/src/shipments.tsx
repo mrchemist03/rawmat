@@ -2,19 +2,16 @@ import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import {
   purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
-  shipmentListSchema, shipmentReceiptSchema, shipmentStatus, shipmentUpdateSchema,
+  shipmentListSchema, shipmentReceiptSchema, shipmentStatus, shipmentStatusLabels as labels, shipmentUpdateSchema,
   trackingNumberSchema,
 } from "@rawmat/shared"
-import type { ReferenceOption, ShipmentDetail, ShipmentStatus } from "@rawmat/shared"
+import type { ReferenceOption, ShipmentDetail } from "@rawmat/shared"
 import { rejection, request, unavailable } from "./api"
 import { Lookup, materialOptions } from "./lookup"
 import { EditorActions, Listing, useCollection, useEditor } from "./management"
+import { CsvExport } from "./csv-export"
 
 const path = "/api/shipments"
-const labels: Record<ShipmentStatus, string> = {
-  registered: "مسجّلة", picked_up: "استلمها الناقل", in_transit: "في الطريق", out_for_delivery: "خرجت للتوصيل",
-  delivered: "سُلّمت", exception: "مشكلة", returned: "مرتجعة",
-}
 const dateTime = new Intl.DateTimeFormat("ar-u-ca-gregory-nu-latn", {
   dateStyle: "medium", timeStyle: "short",
 })
@@ -256,7 +253,10 @@ export function Shipments() {
   }
 
   return <section className="surface">
-    <div className="section-heading"><h1>الشحنات</h1><button onClick={() => { show(); setCreating(true) }}>إضافة شحنة</button></div>
+    <div className="section-heading"><h1>الشحنات</h1><div className="actions">
+      <CsvExport endpoint={path + "/export"} filename="shipments.csv" query={list.exportQuery} />
+      <button onClick={() => { show(); setCreating(true) }}>إضافة شحنة</button>
+    </div></div>
     {notice && <p role="status" className="notice">{notice}</p>}
     {error && <p role="alert" className="error">{error}</p>}
     {creating && <ShipmentEditor onClose={() => setCreating(false)} onSaved={(id, duplicate) => {

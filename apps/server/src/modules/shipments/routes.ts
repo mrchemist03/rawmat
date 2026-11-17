@@ -1,6 +1,6 @@
 import {
   listQuerySchema, purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
-  shipmentListSchema, shipmentQuerySchema, shipmentReceiptSchema, shipmentUpdateSchema,
+  shipmentListSchema, shipmentQuerySchema, shipmentReceiptSchema, shipmentStatusLabels, shipmentUpdateSchema,
   trackingNumberSchema,
 } from "@rawmat/shared"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
@@ -10,6 +10,7 @@ import { listActiveBranches } from "../inventory/repository.js"
 import { createTrackingPoller, trackingRefreshDelay } from "./polling.js"
 import { createShipmentRepository } from "./repository.js"
 import type { TrackingProvider } from "./tracking.js"
+import { allowExport, exportRowLimit, sendCsv } from "../reporting/csv.js"
 
 export function registerShipments(app: FastifyInstance, auth: AuthAccess, options: AuthOptions & {
   shipmentTracking?: { provider: TrackingProvider; intervalMs?: number }
@@ -72,6 +73,20 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
     const query = listQuerySchema.safeParse(request.query)
     if (!query.success) return invalid(reply)
     return purchaseBranchListSchema.parse(listActiveBranches(options.db, query.data.search ?? "", query.data.page ?? 1))
+  })
+
+  app.get("/api/shipments/export", async (request, reply) => {
+    const actor = authorize(request, reply)
+    if (!actor) return
+    const query = shipmentQuerySchema.safeParse(request.query)
+    if (!query.success) return invalid(reply)
+    if (!allowExport(auth, actor.id, request, reply)) return
+    const { items } = repository.list({ ...query.data, page: 1 }, exportRowLimit + 1)
+    return sendCsv(reply, "shipments.csv", ["رقم التتبع", "شعبة المصدر", "شعبة الوجهة", "تاريخ الإرسال", "الحالة",
+      "آخر حدث", "الموقع", "وقت الحدث (UTC)", "وقت تأكيد الاستلام (UTC)"],
+      items.map((item) => [item.trackingNumber, item.sourceName, item.destinationName, item.dispatchedOn,
+        shipmentStatusLabels[item.status], item.lastEvent.description, item.lastEvent.location,
+        new Date(item.lastEvent.occurredAt).toISOString(), item.receivedAt === null ? null : new Date(item.receivedAt).toISOString()]))
   })
 
   app.get("/api/shipments/tracking/:number", async (request, reply) => {

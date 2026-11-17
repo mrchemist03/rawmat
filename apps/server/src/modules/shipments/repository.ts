@@ -60,14 +60,14 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
       return db.select({ id: shipments.id }).from(shipments).where(eq(shipments.trackingNumber, trackingNumber)).get()
     },
 
-    list({ page = 1, status, sort = "newest", search = "" }: ShipmentQuery) {
+    list({ page = 1, status, sort = "newest", search = "" }: ShipmentQuery, limit = pageSize) {
       const term = search.toUpperCase()
       const filter = and(status ? eq(shipments.status, status) : undefined, term
         ? sql`(instr(${shipments.trackingNumber}, ${term}) > 0 or instr(upper(${source.name}), ${term}) > 0 or instr(upper(${destination.name}), ${term}) > 0)`
         : undefined)
       const items = listing().where(filter)
         .orderBy(sort === "dispatch" ? desc(shipments.dispatchedOn) : desc(shipments.createdAt), asc(shipments.id))
-        .limit(pageSize).offset((page - 1) * pageSize).all()
+        .limit(limit).offset((page - 1) * pageSize).all()
       const total = db.select({ total: count() }).from(shipments).innerJoin(source, eq(source.id, shipments.sourceId))
         .innerJoin(destination, eq(destination.id, shipments.destinationId)).where(filter).get()?.total ?? 0
       return { items, total }

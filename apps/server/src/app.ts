@@ -15,6 +15,7 @@ import { registerAudit } from "./modules/management/audit.js"
 import { registerPurchases } from "./modules/purchases/routes.js"
 import { registerShipments } from "./modules/shipments/routes.js"
 import { registerNotifications } from "./modules/notifications/routes.js"
+import { registerOverview } from "./modules/reporting/overview.js"
 import type { NotificationDelivery } from "./modules/notifications/delivery.js"
 import type { TrackingProvider } from "./modules/shipments/tracking.js"
 
@@ -118,6 +119,7 @@ export function buildApp(
       registerPurchases(scope, access, auth)
       registerShipments(scope, access, auth)
       registerNotifications(scope, access, auth, auth.notificationDelivery)
+      registerOverview(scope, access, auth)
       const meError = z.toJSONSchema(z.strictObject({ error: z.string() }))
       scope.get("/api/me", {
         schema: { response: { 200: z.toJSONSchema(meSchema), 401: meError, 403: meError } },
@@ -132,6 +134,7 @@ export function buildApp(
         return reply.sendFile("index.html", webRoot, { cacheControl: false })
       })
       for (const [path, permission] of [
+        ["/account", "viewWorkspace"],
         ["/accounts", "manageAccounts"], ["/branches", "manageBranches"],
         ["/materials", "viewWorkspace"], ["/references", "manageReferenceData"],
         ["/audit", "viewAudit"],

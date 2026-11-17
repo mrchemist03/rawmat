@@ -2,19 +2,16 @@ import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import {
   purchaseBranchListSchema, purchaseDetailSchema, purchaseIdSchema, purchaseInputSchema,
-  purchaseListSchema, purchaseStatus, referenceListSchema,
+  purchaseListSchema, purchaseStatus, purchaseStatusLabels as statusLabels, referenceListSchema,
 } from "@rawmat/shared"
-import type { PurchaseDetail, PurchaseStatus, ReferenceOption } from "@rawmat/shared"
+import type { PurchaseDetail, ReferenceOption } from "@rawmat/shared"
 import { rejection, request, unavailable } from "./api"
 import { EditorActions, Listing, useCollection, useEditor } from "./management"
+import { CsvExport } from "./csv-export"
 import { PurchaseOperations } from "./purchase-operations"
 import { Lookup, materialOptions } from "./lookup"
 
 const path = "/api/purchases"
-const statusLabels: Record<PurchaseStatus, string> = {
-  draft: "مسودة", submitted: "مُرسل", approved: "معتمد", rejected: "مرفوض",
-  ordered: "تم الطلب", partially_received: "مُستلم جزئيًا", received: "مُستلم", cancelled: "ملغى",
-}
 const number = new Intl.NumberFormat("ar-u-nu-latn", { maximumSignificantDigits: 15 })
 type Item = { key: number; material?: ReferenceOption; quantity: string }
 
@@ -158,7 +155,10 @@ export function Purchases() {
   }
 
   return <section className="surface">
-    <div className="section-heading"><h1>طلبات الشراء</h1><button onClick={() => show(undefined, true)}>طلب شراء جديد</button></div>
+    <div className="section-heading"><h1>طلبات الشراء</h1><div className="actions">
+      <CsvExport endpoint={path + "/export"} filename="purchases.csv" query={data.exportQuery} />
+      <button onClick={() => show(undefined, true)}>طلب شراء جديد</button>
+    </div></div>
     {notice && <p className="notice" role="status">{notice}</p>}
     {error && <p className="error" role="alert">{error}</p>}
     {editing && <PurchaseEditor key={detail?.id ?? "new"} initial={detail}

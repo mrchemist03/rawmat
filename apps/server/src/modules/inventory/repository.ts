@@ -32,6 +32,24 @@ export function branchBalance(db: Pick<AppDatabase, "select">, materialId: strin
   return rows.reduce((balance, row) => balance.plus(row.quantity), new Quantity(0))
 }
 
+export function countLowStock(db: Pick<AppDatabase, "select">) {
+  const below = db.select({ id: materials.id, minimum: materials.minimumQuantity }).from(materials)
+    .where(and(eq(materials.archived, false), sql`${materials.minimumQuantity} > 0`)).all()
+  if (!below.length) return 0
+  const target = sql<string>`coalesce(${materials.mergedIntoId}, ${materials.id})`
+  const limited = db.select({ id: materials.id }).from(materials)
+    .where(and(eq(materials.archived, false), sql`${materials.minimumQuantity} > 0`))
+  const quantities = db.select({ materialId: target, quantity: stockMovements.quantity }).from(stockMovements)
+    .innerJoin(branches, eq(stockMovements.branchId, branches.id))
+    .innerJoin(materials, eq(stockMovements.materialId, materials.id))
+    .where(and(eq(branches.active, true), inArray(target, limited))).all()
+  const stock = new Map<string, InstanceType<typeof Quantity>>()
+  for (const { materialId, quantity } of quantities) {
+    stock.set(materialId, (stock.get(materialId) ?? new Quantity(0)).plus(quantity))
+  }
+  return below.filter(({ id, minimum }) => (stock.get(id) ?? new Quantity(0)).lt(minimum)).length
+}
+
 export function listActiveBranches(db: Pick<AppDatabase, "select">, search: string, page: number) {
   const filter = and(eq(branches.active, true),
     search ? sql`instr(lower(${branches.name}), ${search.toLowerCase()}) > 0` : undefined)

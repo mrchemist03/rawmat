@@ -79,10 +79,10 @@ test("grants purchase approvals to the intended roles and keeps management restr
 
 test("returns only name and navigation for each role and withholds management routes", async () => {
   expect((await get("/api/me", manager)).json()).toEqual({
-    name: accountName, navigation: ["account", "materials", "purchases", "shipments", "notifications", "accounts", "branches", "references", "audit"],
+    name: accountName, navigation: ["overview", "account", "materials", "purchases", "shipments", "notifications", "accounts", "branches", "references", "audit"],
   })
-  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account", "materials", "purchases", "shipments", "notifications"] })
-  expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["account", "materials", "purchases", "shipments"] })
+  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["overview", "account", "materials", "purchases", "shipments", "notifications"] })
+  expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["overview", "account", "materials", "purchases", "shipments"] })
   expect((await get("/api/me")).statusCode).toBe(401)
   for (const cookie of [undefined, admin, basic]) {
     for (const path of ["/accounts", "/branches", "/references", "/api/manage/accounts", "/api/manage/branches", "/api/manage/catalogue/suppliers"]) {

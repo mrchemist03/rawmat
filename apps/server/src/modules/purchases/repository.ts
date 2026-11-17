@@ -63,7 +63,7 @@ export function createPurchaseRepository(db: AppDatabase, now: () => number) {
     exists(id: string) {
       return Boolean(db.select({ id: purchaseRequests.id }).from(purchaseRequests).where(eq(purchaseRequests.id, id)).get())
     },
-    list(actor: Actor, { status, search = "", sort = "newest", page = 1 }: PurchaseQuery) {
+    list(actor: Actor, { status, search = "", sort = "newest", page = 1 }: PurchaseQuery, limit = pageSize) {
       const term = search.toLowerCase()
       const filter = and(status ? eq(purchaseRequests.status, status) : undefined, term
         ? sql`(instr(lower(${purchaseRequests.number}), ${term}) > 0 or instr(lower(${branches.name}), ${term}) > 0 or instr(lower(coalesce(${suppliers.name}, '')), ${term}) > 0)`
@@ -73,7 +73,7 @@ export function createPurchaseRepository(db: AppDatabase, now: () => number) {
         .innerJoin(users, eq(purchaseRequests.requestedBy, users.id))
         .leftJoin(suppliers, eq(purchaseRequests.supplierId, suppliers.id)).where(filter)
         .orderBy(sort === "neededOn" ? asc(purchaseRequests.neededOn) : desc(purchaseRequests.createdAt), asc(purchaseRequests.id))
-        .limit(pageSize).offset((page - 1) * pageSize).all()
+        .limit(limit).offset((page - 1) * pageSize).all()
       const items = rows.map(({ requestedBy, ...summary }) => ({ ...summary, actions: draftActions({ ...summary, requestedBy }, actor) }))
       const total = db.select({ total: count() }).from(purchaseRequests)
         .innerJoin(branches, eq(purchaseRequests.branchId, branches.id))

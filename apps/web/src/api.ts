@@ -7,6 +7,7 @@ const messages: Record<string, string> = {
   invalid_reference: "تحقّق من الفئة ووحدة القياس والمورد.",
   invalid_name: "أدخل اسمًا يحتوي على حروف أو أرقام.",
   invalid_csv: "تحقّق من ترميز CSV ورؤوس الأعمدة والحد الأقصى للصفوف.",
+  export_too_large: "النتائج تتجاوز حد التصدير. ضيّق البحث أو التصفية ثم حاول مرة أخرى.",
   invalid_merge: "اختر مادة فعّالة أخرى لها وحدة القياس نفسها.",
   invalid_purchase_reference: "اختر شعبة فعّالة ومواد فعّالة، وتحقّق من المورد.",
   stale_purchase: "تغيّر الطلب منذ فتحه. أعد فتح تفاصيله قبل المحاولة مجددًا.",
@@ -36,12 +37,13 @@ const messages: Record<string, string> = {
 
 export const unavailable = "تعذّر إتمام الطلب. حاول مجددًا."
 
-export async function request(url: string, body?: unknown, method = "POST") {
-  return fetch(url, body === undefined ? { cache: "no-store" } : {
+export async function request(url: string, body?: unknown, method = "POST", signal?: AbortSignal) {
+  return fetch(url, body === undefined ? { cache: "no-store", signal } : {
     method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     cache: "no-store",
+    signal,
   })
 }
 
