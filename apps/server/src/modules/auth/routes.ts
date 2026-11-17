@@ -79,11 +79,14 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions) {
     if (pendingPasswords >= 2 || pendingChallenges >= 16) return busy(reply)
 
     const { loginName, password, turnstileToken } = input.data
-    if (!repository.reserveLoginAttempt(keyed("account", loginName), keyed("address", clientAddress(request)), now())) {
+    const turnstile = config.turnstile
+    const accountKey = keyed("account", loginName)
+    const addressKey = keyed("address", clientAddress(request))
+    // Limit the caller before contacting Turnstile. Charge the account after human verification.
+    if (!repository.reserveLoginAttempt(turnstile ? null : accountKey, addressKey, now())) {
       return limited(reply)
     }
 
-    const turnstile = config.turnstile
     if (turnstile) {
       if (!turnstileToken) return reply.code(400).send({ error: "challenge_required" })
       pendingChallenges += 1
@@ -99,6 +102,7 @@ export async function registerAuth(app: FastifyInstance, options: AuthOptions) {
     }
 
     if (pendingPasswords >= 2) return busy(reply)
+    if (turnstile && !repository.reserveLoginAttempt(accountKey, null, now())) return limited(reply)
     pendingPasswords += 1
     try {
       const user = repository.findUser(loginName)

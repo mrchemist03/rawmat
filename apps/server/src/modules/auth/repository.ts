@@ -33,16 +33,19 @@ export function createAuthRepository(db: AppDatabase) {
         .from(users).where(and(eq(users.loginName, loginName), eq(users.active, true))).get()
     },
 
-    reserveLoginAttempt(accountKey: string, addressKey: string, now: number, limit = loginLimit, window = loginWindow) {
+    reserveLoginAttempt(accountKey: string | null, addressKey: string | null, now: number,
+      limit = loginLimit, window = loginWindow) {
       return db.transaction((tx) => {
         const cutoff = now - window
         tx.delete(loginAttempts).where(lte(loginAttempts.attemptedAt, now - loginWindow)).run()
-        const account = tx.select({ count: count() }).from(loginAttempts)
+        const account = accountKey === null ? undefined : tx.select({ count: count() }).from(loginAttempts)
           .where(and(eq(loginAttempts.accountKey, accountKey), gt(loginAttempts.attemptedAt, cutoff))).get()
-        const address = tx.select({ count: count() }).from(loginAttempts)
+        const address = addressKey === null ? undefined : tx.select({ count: count() }).from(loginAttempts)
           .where(and(eq(loginAttempts.addressKey, addressKey), gt(loginAttempts.attemptedAt, cutoff))).get()
         if ((account?.count ?? 0) >= limit || (address?.count ?? 0) >= limit) return false
-        tx.insert(loginAttempts).values({ accountKey, addressKey, attemptedAt: now }).run()
+        tx.insert(loginAttempts).values({
+          accountKey: accountKey ?? "", addressKey: addressKey ?? "", attemptedAt: now,
+        }).run()
         return true
       }, { behavior: "immediate" })
     },

@@ -196,6 +196,29 @@ describe("authentication", () => {
       .toEqual({ error: "challenge_required" })
   })
 
+  test("limits rejected challenges by address and reserves account attempts after verification", async () => {
+    const config = readServerConfig({ APP_URL: origin, TURNSTILE_SITE_KEY: "fixture-site", TURNSTILE_SECRET_KEY: "fixture-secret" })
+    const verify = vi.fn<typeof verifyTurnstile>()
+      .mockResolvedValueOnce("unavailable").mockResolvedValue("rejected")
+    createAuthRepository(database.db).bootstrapUser("Fixture", "first.user", passwordHash, clock)
+    app = createTestApp({ config, verifyChallenge: verify })
+    const address = "192.0.2.10"
+    expect((await login("first.user", initialPassword, address)).statusCode).toBe(400)
+    expect((await login("first.user", initialPassword, address, "fixture-unavailable")).statusCode).toBe(503)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect((await login("first.user", initialPassword, address, "fixture-rejected")).statusCode).toBe(400)
+    }
+    expect((await login("first.user", initialPassword, address, "fixture-limited")).statusCode).toBe(429)
+    expect(verify).toHaveBeenCalledTimes(4)
+
+    verify.mockResolvedValue("verified")
+    expect((await login("first.user", initialPassword, "192.0.2.11", "fixture-accepted")).statusCode).toBe(200)
+    for (let attempt = 0; attempt < 4; attempt++) {
+      expect((await login("first.user", "wrong password", `192.0.2.${20 + attempt}`, `fixture-valid-${attempt}`)).statusCode).toBe(401)
+    }
+    expect((await login("first.user", initialPassword, "192.0.2.30", "fixture-after-limit")).statusCode).toBe(429)
+  })
+
   test("leaves no open registration endpoint and enforces foreign keys", async () => {
     app = createTestApp()
     expect((await app.inject({ method: "POST", url: "/api/auth/register", headers })).statusCode).toBe(404)
