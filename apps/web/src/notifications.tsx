@@ -16,10 +16,11 @@ const labels: Record<NotificationEvent, string> = {
   "shipment.attention": "تأخّر شحنة أو وجود مشكلة", "inventory.low": "مادة تحت الحد الأدنى",
   "notification.test": "إرسال تجريبي",
 }
-const states = { pending: "قيد الإرسال", sent: "استلمه n8n", failed: "فشل" }
+const states = { pending: "قيد الإرسال", sent: "أُرسل عبر n8n", failed: "فشل" }
 const failures = {
   connection: "تعذّر الاتصال", http: "رفض n8n الطلب", response: "تعذّر تأكيد قبول n8n",
   recipients: "تغيّر المستلمون أو عُطّلوا",
+  expired: "انتهت مدة انتظار الإرسال",
 }
 const formatTime = new Intl.DateTimeFormat("ar-u-ca-gregory-nu-latn", { dateStyle: "medium", timeStyle: "short" })
 type Settings = z.infer<typeof notificationsSettingsSchema>
@@ -163,7 +164,7 @@ export function Notifications() {
           <td><bdi>{formatTime.format(item.sentAt ?? item.occurredAt)}</bdi></td>
           <td>{item.state === "pending" && item.attempts ? "قيد إعادة المحاولة" : states[item.state]}
             {item.lastError && <small className="table-note">{failures[item.lastError]}</small>}
-            {item.state === "failed" && item.lastError !== "recipients" && settings.configured &&
+            {item.state === "failed" && item.lastError !== "recipients" && item.lastError !== "expired" && settings.configured &&
               <button className="secondary compact" disabled={working} onClick={() => void queue("/history/" + item.id + "/retry")}>إعادة المحاولة</button>}
           </td><td>{item.attempts}</td>
         </tr>)}</tbody>

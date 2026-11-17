@@ -1,10 +1,10 @@
-import { createHmac, randomUUID } from "node:crypto"
+import { createHash, createHmac, randomUUID } from "node:crypto"
 import { eq } from "drizzle-orm"
 import { expect, test, vi } from "vitest"
 import { openDatabase } from "../src/db/database.js"
 import { branches, categories, materials, notificationOutbox, notificationRecipients, notificationRules, stockMovements,
   units, users } from "../src/db/schema.js"
-import { createNotificationWorker, readNotificationDelivery } from "../src/modules/notifications/delivery.js"
+import { createNotificationWorker, notificationRetention, pruneNotificationHistory, readNotificationDelivery } from "../src/modules/notifications/delivery.js"
 import { day, queueScheduledNotices } from "../src/modules/notifications/events.js"
 import { createPurchaseRepository } from "../src/modules/purchases/repository.js"
 import { createShipmentRepository } from "../src/modules/shipments/repository.js"
@@ -33,6 +33,12 @@ test("commits a purchase notice once and retries the signed request after n8n re
         .update(headers.get("x-rawmat-timestamp") + "." + result.id + "." + body).digest("hex")
       expect(headers.get("x-rawmat-signature")).toBe("sha256=" + signature)
       expect(headers.get("x-rawmat-event-id")).toBe(result.id)
+      const [header, claims, signed] = headers.get("authorization")!.slice(7).split(".") as [string, string, string]
+      expect(signed).toBe(createHmac("sha256", delivery.key.toString("hex")).update(header + "." + claims).digest("base64url"))
+      expect(JSON.parse(Buffer.from(claims, "base64url").toString("utf8"))).toEqual({
+        iss: "rawmat", aud: "rawmat-notifications", jti: result.id, iat: Math.floor(now / 1000),
+        exp: Math.floor(now / 1000) + 300, sha256: createHash("sha256").update(body).digest("hex"),
+      })
       expect(result.recipients).toEqual([fixturePhone])
       expect(body).not.toContain("private purchase note")
       expect(body).not.toMatch(/price|cost/i)
@@ -70,7 +76,8 @@ test("commits a purchase notice once and retries the signed request after n8n re
     await Promise.all([restarted.run(), worker.run()])
     expect(send).toHaveBeenCalledTimes(2)
     expect(send.mock.calls[0]?.[1]?.body).toBe(send.mock.calls[1]?.[1]?.body)
-    expect(db.select().from(notificationOutbox).get()).toMatchObject({ id: first?.id, state: "sent", attempts: 2 })
+    expect(db.select().from(notificationOutbox).get()).toMatchObject({ id: first?.id, state: "sent", attempts: 2,
+      message: "", data: {}, recipients: [] })
 
     db.update(notificationRules).set({ enabled: true }).where(eq(notificationRules.event, "purchase.overdue")).run()
     db.insert(stockMovements).values({ id: randomUUID(), branchId: branch, materialId: material, quantity: "3", kind: "fixture",
@@ -87,6 +94,38 @@ test("commits a purchase notice once and retries the signed request after n8n re
     queueScheduledNotices(db, now)
     expect(db.select().from(notificationOutbox).all().map(({ event }) => event))
       .toEqual([typeFixture, "inventory.low", "purchase.overdue", "shipment.attention"])
+    db.update(notificationOutbox).set({ state: "sent", sentAt: now }).run()
+    now += notificationRetention + day
+    pruneNotificationHistory(db, now)
+    queueScheduledNotices(db, now)
+    expect(db.select().from(notificationOutbox).all()).toHaveLength(0)
+  } finally {
+    database.close()
+  }
+})
+
+test("expires overdue queue entries without touching recent rows or a delivery in progress", () => {
+  const database = openDatabase(":memory:")
+  try {
+    const { db } = database
+    const now = 1_800_000_000_000
+    const old = now - notificationRetention - 1
+    const recipient = { id: randomUUID(), revision: 1 }
+    const seed = { event: "notification.test" as const, recipients: [recipient], occurredAt: old,
+      message: "ephemeral fixture", data: { value: "fixture" } }
+    db.insert(notificationOutbox).values([
+      { ...seed, id: randomUUID(), dedupeKey: "old-pending", nextAttemptAt: old },
+      { ...seed, id: randomUUID(), dedupeKey: "old-failed", nextAttemptAt: old, state: "failed" },
+      { ...seed, id: randomUUID(), dedupeKey: "recent", nextAttemptAt: now },
+      { ...seed, id: randomUUID(), dedupeKey: "leased", nextAttemptAt: old, leaseUntil: now + 10_000 },
+    ]).run()
+    pruneNotificationHistory(db, now)
+    const rows = new Map(db.select().from(notificationOutbox).all().map((row) => [row.dedupeKey, row]))
+    expect(rows.get("old-pending")).toMatchObject({ state: "failed", lastError: "expired", nextAttemptAt: now,
+      message: "", data: {}, recipients: [] })
+    expect(rows.has("old-failed")).toBe(false)
+    expect(rows.get("recent")?.state).toBe("pending")
+    expect(rows.get("leased")?.state).toBe("pending")
   } finally {
     database.close()
   }

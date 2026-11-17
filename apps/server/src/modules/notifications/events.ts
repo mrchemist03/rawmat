@@ -79,25 +79,31 @@ export function queueScheduledNotices(db: AppDatabase, time: number) {
     const overdue = recipientsFor(tx, "purchase.overdue")
     if (overdue.length) {
       const key = sql<string>`'purchase.overdue:' || ${purchaseRequests.id} || ':' || ${purchaseRequests.neededOn}`
-      const rows = tx.select({ key, number: purchaseRequests.number, neededOn: purchaseRequests.neededOn }).from(purchaseRequests)
+      const rows = tx.select({ key, id: purchaseRequests.id, number: purchaseRequests.number, neededOn: purchaseRequests.neededOn }).from(purchaseRequests)
         .where(and(lt(purchaseRequests.neededOn, new Date(time).toISOString().slice(0, 10)),
           inArray(purchaseRequests.status, ["submitted", "approved", "ordered", "partially_received"]),
-          sql`not exists (select 1 from notification_outbox as queued where queued.dedupe_key = ${key})`))
+          sql`${purchaseRequests.overdueNotifiedOn} is not ${purchaseRequests.neededOn}`))
         .orderBy(asc(purchaseRequests.neededOn), asc(purchaseRequests.id)).limit(reviewLimit).all()
-      for (const row of rows) queueNotice(tx, { event: "purchase.overdue", dedupeKey: row.key, occurredAt: time,
-        message: "تجاوز طلب الشراء " + row.number + " تاريخ الحاجة", data: { number: row.number, neededOn: row.neededOn } }, overdue)
+      for (const row of rows) {
+        queueNotice(tx, { event: "purchase.overdue", dedupeKey: row.key, occurredAt: time,
+          message: "تجاوز طلب الشراء " + row.number + " تاريخ الحاجة", data: { number: row.number, neededOn: row.neededOn } }, overdue)
+        tx.update(purchaseRequests).set({ overdueNotifiedOn: row.neededOn }).where(eq(purchaseRequests.id, row.id)).run()
+      }
       more = rows.length === reviewLimit
     }
     const attention = recipientsFor(tx, "shipment.attention")
     if (attention.length) {
       const activity = sql<number>`coalesce(${shipments.trackingChangedAt}, ${shipments.createdAt})`
       const key = sql<string>`'shipment.stale:' || ${shipments.id} || ':' || ${activity}`
-      const rows = tx.select({ key, awb: shipments.trackingNumber }).from(shipments)
+      const rows = tx.select({ key, activity, id: shipments.id, awb: shipments.trackingNumber }).from(shipments)
         .where(and(isNull(shipments.receivedAt), notInArray(shipments.status, ["delivered", "returned", "exception"]),
-          lte(activity, time - 3 * day), sql`not exists (select 1 from notification_outbox as queued where queued.dedupe_key = ${key})`))
+          lte(activity, time - 3 * day), sql`${shipments.staleNotifiedActivityAt} is not ${activity}`))
         .orderBy(asc(activity), asc(shipments.id)).limit(reviewLimit).all()
-      for (const row of rows) queueNotice(tx, { event: "shipment.attention", dedupeKey: row.key, occurredAt: time,
-        message: "لم يرد تحديث للشحنة " + row.awb + " منذ ثلاثة أيام", data: { awb: row.awb, reason: "stale" } }, attention)
+      for (const row of rows) {
+        queueNotice(tx, { event: "shipment.attention", dedupeKey: row.key, occurredAt: time,
+          message: "لم يرد تحديث للشحنة " + row.awb + " منذ ثلاثة أيام", data: { awb: row.awb, reason: "stale" } }, attention)
+        tx.update(shipments).set({ staleNotifiedActivityAt: row.activity }).where(eq(shipments.id, row.id)).run()
+      }
       more ||= rows.length === reviewLimit
     }
     return more

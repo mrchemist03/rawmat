@@ -1,5 +1,5 @@
-import { createHmac } from "node:crypto"
-import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm"
+import { createHash, createHmac } from "node:crypto"
+import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
 import type { AppDatabase } from "../../db/database.js"
 import { notificationOutbox, notificationRecipients } from "../../db/schema.js"
 import { day, queueScheduledNotices } from "./events.js"
@@ -7,6 +7,9 @@ import { day, queueScheduledNotices } from "./events.js"
 const pending = sql`${notificationOutbox.state} = 'pending'`
 const delays = [60_000, 300_000, 1_800_000, 7_200_000]
 const acknowledgementLimit = 4096
+export const notificationRetention = 30 * day
+const cleanupBatch = 250
+const clearedPayload = { message: "", data: {}, recipients: [] }
 type Job = typeof notificationOutbox.$inferSelect
 type Failure = NonNullable<Job["lastError"]>
 export type NotificationDelivery = { url: URL; key: Buffer }
@@ -24,6 +27,34 @@ export function readNotificationDelivery(env: NodeJS.ProcessEnv): NotificationDe
     throw new Error("N8N_WEBHOOK_SECRET must contain 32 random bytes in hexadecimal")
   }
   return { url, key: Buffer.from(env.N8N_WEBHOOK_SECRET, "hex") }
+}
+
+export function pruneNotificationHistory(db: AppDatabase, time: number) {
+  return db.transaction((tx) => {
+    const old = lt(notificationOutbox.nextAttemptAt, time - notificationRetention)
+    const terminal = tx.select({ id: notificationOutbox.id }).from(notificationOutbox)
+      .where(and(old, inArray(notificationOutbox.state, ["sent", "failed"]))).limit(cleanupBatch).all()
+    if (terminal.length) {
+      tx.delete(notificationOutbox).where(inArray(notificationOutbox.id, terminal.map(({ id }) => id))).run()
+    }
+    const abandoned = tx.select({ id: notificationOutbox.id }).from(notificationOutbox).where(and(pending, old,
+      or(isNull(notificationOutbox.leaseUntil), lte(notificationOutbox.leaseUntil, time)))).limit(cleanupBatch).all()
+    if (abandoned.length) {
+      tx.update(notificationOutbox).set({ ...clearedPayload, state: "failed", lastError: "expired",
+        leaseUntil: null, nextAttemptAt: time }).where(inArray(notificationOutbox.id, abandoned.map(({ id }) => id))).run()
+    }
+    return terminal.length === cleanupBatch || abandoned.length === cleanupBatch
+  }, { behavior: "immediate" })
+}
+
+function webhookToken(key: Buffer, id: string, timestamp: number, body: string) {
+  const header = Buffer.from('{"alg":"HS256","typ":"JWT"}').toString("base64url")
+  const payload = Buffer.from(JSON.stringify({
+    iss: "rawmat", aud: "rawmat-notifications", jti: id, iat: timestamp, exp: timestamp + 300,
+    sha256: createHash("sha256").update(body).digest("hex"),
+  })).toString("base64url")
+  const claims = header + "." + payload
+  return claims + "." + createHmac("sha256", key.toString("hex")).update(claims).digest("base64url")
 }
 
 async function accepted(response: Response, id: string) {
@@ -72,13 +103,14 @@ export function createNotificationWorker(db: AppDatabase, delivery: Notification
     if (!recipients.length) return "recipients"
     const body = JSON.stringify({ id: job.id, event: job.event, occurred_at: new Date(job.occurredAt).toISOString(),
       recipients, message: job.message, data: job.data })
-    const timestamp = String(Math.floor(now() / 1000))
+    const timestamp = Math.floor(now() / 1000)
     const signature = createHmac("sha256", delivery.key).update(timestamp + "." + job.id + "." + body).digest("hex")
     const timeout = AbortSignal.timeout(10_000)
     const signal = shutdown ? AbortSignal.any([timeout, shutdown]) : timeout
     try {
       const response = await sendRequest(delivery.url, { method: "POST", body, signal, redirect: "error", headers: {
-        "content-type": "application/json", "x-rawmat-timestamp": timestamp, "x-rawmat-event-id": job.id,
+        "content-type": "application/json", authorization: "Bearer " + webhookToken(delivery.key, job.id, timestamp, body),
+        "x-rawmat-timestamp": String(timestamp), "x-rawmat-event-id": job.id,
         "x-rawmat-signature": "sha256=" + signature,
       } })
       if (!response.ok) {
@@ -102,7 +134,8 @@ export function createNotificationWorker(db: AppDatabase, delivery: Notification
     const attempts = job.attempts + 1
     const delay = delays[attempts - 1]
     const state = !failure ? "sent" : delay !== undefined && failure !== "recipients" ? "pending" : "failed"
-    db.update(notificationOutbox).set({ state, attempts, lastError: failure, leaseUntil: null,
+    db.update(notificationOutbox).set({ ...(state === "sent" || failure === "recipients" ? clearedPayload : {}),
+      state, attempts, lastError: failure, leaseUntil: null,
       sentAt: state === "sent" ? time : null, nextAttemptAt: state === "pending" ? time + (delay ?? 0) : time }).where(where).run()
   }
 

@@ -1,10 +1,11 @@
 {
-  "name": "Rawmat signed notifications receiver",
+  "name": "Rawmat direct notifications",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "rawmat-notifications",
+        "path": "rawmat-notifications-direct",
+        "authentication": "jwtAuth",
         "responseMode": "responseNode",
         "options": {
           "rawBody": true
@@ -22,46 +23,73 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nconst headers = item.json.headers ?? {};\nconst stringHeader = (name) => typeof headers[name] === 'string' && headers[name].length <= 80 ? headers[name] : '';\nconst body = item.binary?.data ? await this.helpers.getBinaryDataBuffer(0, 'data') : Buffer.alloc(0);\nreturn [{ json: {\n  id: stringHeader('x-rawmat-event-id'),\n  timestamp: stringHeader('x-rawmat-timestamp'),\n  signature: stringHeader('x-rawmat-signature'),\n  body: body.length <= 8192 ? body.toString('base64') : '',\n} }];"
+        "action": "hash",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "type": "SHA256",
+        "encoding": "hex",
+        "dataPropertyName": "rawmatSha256"
       },
-      "type": "n8n-nodes-base.code",
+      "type": "n8n-nodes-base.crypto",
       "typeVersion": 2,
       "position": [
         240,
         0
       ],
-      "id": "68fcf683-2fca-4446-98c3-46a59d31d74f",
-      "name": "Prepare signed request"
+      "id": "fb29bf59-18fd-43c9-8ada-2a7bd8d74136",
+      "name": "Hash raw body"
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT * FROM rawmat_notifications.accept($1, $2, $3, $4)",
-        "options": {
-          "queryReplacement": "={{ [$json.id, $json.timestamp, $json.signature, $json.body] }}"
-        }
+        "jsCode": "const { body, jwtPayload: token, rawmatSha256 } = $input.first().json;\nconst now = Math.floor(Date.now() / 1000);\nconst eventId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;\nif (!token || token.iss !== 'rawmat' || token.aud !== 'rawmat-notifications' ||\n    !Number.isInteger(token.iat) || token.iat > now + 30 || token.exp !== token.iat + 300 ||\n    token.exp <= now || !eventId.test(token.jti ?? '') || token.sha256 !== rawmatSha256 ||\n    !body || body.id !== token.jti || typeof body.message !== 'string' ||\n    body.message.length === 0 || body.message.length > 1024 ||\n    !Array.isArray(body.recipients) || body.recipients.length === 0 || body.recipients.length > 40 ||\n    body.recipients.some((number) => typeof number !== 'string' || !/^\\+[1-9][0-9]{6,14}$/.test(number)) ||\n    new Set(body.recipients).size !== body.recipients.length) {\n  throw new Error('Invalid Rawmat notification');\n}\nreturn body.recipients.map((recipient) => ({ json: { id: body.id, recipient, message: body.message } }));"
       },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         480,
         0
       ],
+      "id": "68fcf683-2fca-4446-98c3-46a59d31d74f",
+      "name": "Validate and split"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        720,
+        0
+      ],
       "id": "3d1a5695-5fd8-4ff7-9956-e63776234e3c",
-      "name": "Verify and persist"
+      "name": "Replace with WhatsApp or SMS",
+      "notesInFlow": true,
+      "notes": "Replace this placeholder with a WhatsApp Business Cloud or Twilio SMS node. Leave retry-on-fail off and stop on errors."
+    },
+    {
+      "parameters": {
+        "jsCode": "const requests = $('Validate and split').all();\nconst responses = $input.all();\nconst hasProviderId = ({ json }) =>\n  [json.messages?.[0]?.id, json.sid].some((id) => typeof id === 'string' && id.length > 0);\nif (!requests.length || responses.length !== requests.length || !responses.every(hasProviderId)) {\n  throw new Error('Message provider did not confirm every recipient');\n}\nreturn [{ json: { id: requests[0].json.id, accepted: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "id": "703c6a49-48c3-45a5-991e-30e1857e3c18",
+      "name": "Confirm provider accepted"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ $json.accepted === true ? { accepted: true, id: $json.id } : { accepted: false } }}",
+        "responseBody": "={{ { accepted: $json.accepted, id: $json.id } }}",
         "options": {
-          "responseCode": "={{ $json.status_code }}"
+          "responseCode": 200
         }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.4,
       "position": [
-        720,
+        1200,
         0
       ],
       "id": "0a97079e-ff01-409d-89ea-09b05622cf49",
@@ -73,25 +101,47 @@
       "main": [
         [
           {
-            "node": "Prepare signed request",
+            "node": "Hash raw body",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Prepare signed request": {
+    "Hash raw body": {
       "main": [
         [
           {
-            "node": "Verify and persist",
+            "node": "Validate and split",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Verify and persist": {
+    "Validate and split": {
+      "main": [
+        [
+          {
+            "node": "Replace with WhatsApp or SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace with WhatsApp or SMS": {
+      "main": [
+        [
+          {
+            "node": "Confirm provider accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm provider accepted": {
       "main": [
         [
           {

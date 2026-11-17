@@ -23,7 +23,7 @@ export const notificationHistorySchema = z.strictObject({
   items: z.array(z.strictObject({
     id: z.uuid(), event: notificationEvent, state: notificationState, attempts: z.number().int(),
     occurredAt: z.number().int(), nextAttemptAt: z.number().int(), sentAt: z.number().int().nullable(),
-    lastError: z.enum(["connection", "response", "http", "recipients"]).nullable(),
+    lastError: z.enum(["connection", "response", "http", "recipients", "expired"]).nullable(),
   })), total: z.number().int(),
 })
 

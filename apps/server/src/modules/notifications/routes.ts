@@ -7,9 +7,9 @@ import { z } from "zod"
 import { auditLog, notificationOutbox, notificationRecipients, notificationRules } from "../../db/schema.js"
 import { can } from "../auth/permissions.js"
 import type { AuthAccess, AuthOptions } from "../auth/routes.js"
-import { createNotificationWorker } from "./delivery.js"
+import { createNotificationWorker, pruneNotificationHistory } from "./delivery.js"
 import type { NotificationDelivery } from "./delivery.js"
-import { queueNotice } from "./events.js"
+import { day, queueNotice } from "./events.js"
 
 const path = "/api/notifications"
 const idParam = z.strictObject({ id: z.uuid() })
@@ -20,25 +20,26 @@ export function registerNotifications(app: FastifyInstance, auth: AuthAccess, op
   const { db, now = Date.now } = options
   const worker = delivery && createNotificationWorker(db, delivery, now)
   const shutdown = new AbortController()
+  let cleanupAt = 0
   async function run() {
     try {
+      const time = now()
+      if (!shutdown.signal.aborted && time >= cleanupAt && !pruneNotificationHistory(db, time)) cleanupAt = time + day
       await worker?.run(shutdown.signal)
     } catch {
       app.log.error("notification worker failed")
     }
   }
-  if (worker) {
-    let timer: NodeJS.Timeout | undefined
-    app.addHook("onListen", async () => {
-      timer = setInterval(() => void run(), 5_000).unref()
-      void run()
-    })
-    app.addHook("preClose", async () => {
-      clearInterval(timer)
-      shutdown.abort()
-      await run()
-    })
-  }
+  let timer: NodeJS.Timeout | undefined
+  app.addHook("onListen", async () => {
+    timer = setInterval(() => void run(), 5_000).unref()
+    void run()
+  })
+  app.addHook("preClose", async () => {
+    clearInterval(timer)
+    shutdown.abort()
+    await run()
+  })
 
   function authorize(request: FastifyRequest, reply: FastifyReply, write = false) {
     const principal = auth.principal(request)
@@ -174,7 +175,7 @@ export function registerNotifications(app: FastifyInstance, auth: AuthAccess, op
     const result = db.update(notificationOutbox)
       .set({ state: "pending", attempts: 0, nextAttemptAt: now(), lastError: null })
       .where(and(eq(notificationOutbox.id, params.data.id), eq(notificationOutbox.state, "failed"),
-        sql`${notificationOutbox.lastError} <> 'recipients'`)).run()
+        sql`${notificationOutbox.lastError} not in ('recipients', 'expired')`)).run()
     if (!result.changes) return missing(reply)
     setImmediate(() => void run())
     return reply.code(202).send()

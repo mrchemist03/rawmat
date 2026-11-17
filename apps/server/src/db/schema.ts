@@ -113,6 +113,7 @@ export const purchaseRequests = sqliteTable("purchase_requests", {
   requestedBy: text("requested_by").notNull().references(() => users.id),
   supplierId: text("supplier_id").references(() => suppliers.id),
   neededOn: text("needed_on").notNull(),
+  overdueNotifiedOn: text("overdue_notified_on"),
   notes: text().notNull().default(""),
   status: text().$type<PurchaseStatus>().notNull().default("draft"),
   revision: integer().notNull().default(1),
@@ -195,6 +196,7 @@ export const shipments = sqliteTable("shipments", {
   pollFailures: integer("poll_failures").notNull().default(0),
   lastPolledAt: integer("last_polled_at"),
   trackingChangedAt: integer("tracking_changed_at"),
+  staleNotifiedActivityAt: integer("stale_notified_activity_at"),
   lastRefreshAt: integer("last_refresh_at"),
 }, (table) => [
   check("shipment_branches_distinct", sql`${table.sourceId} <> ${table.destinationId}`),
@@ -262,7 +264,7 @@ export const notificationOutbox = sqliteTable("notification_outbox", {
   nextAttemptAt: integer("next_attempt_at").notNull(),
   leaseUntil: integer("lease_until"),
   sentAt: integer("sent_at"),
-  lastError: text("last_error").$type<"connection" | "response" | "http" | "recipients">(),
+  lastError: text("last_error").$type<"connection" | "response" | "http" | "recipients" | "expired">(),
 }, (table) => [
   index("notification_pending").on(table.nextAttemptAt).where(sql`${table.state} = 'pending'`),
   index("notification_history").on(table.occurredAt, table.id),
