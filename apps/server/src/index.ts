@@ -13,6 +13,7 @@ try {
     config, db: database.db, trustProxy: config.trustProxy,
     similarityThresholds: config.similarityThresholds,
     baseCurrency: config.baseCurrency,
+    notificationDelivery: config.notificationDelivery,
     brandingRoot: process.env.BRANDING_PATH || "./deploy/branding",
     shipmentTracking: config.aramex && {
       provider: createAramexProvider(config.aramex), intervalMs: config.trackingIntervalMs,

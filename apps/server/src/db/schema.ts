@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm"
 import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import { uniqueIndex } from "drizzle-orm/sqlite-core"
-import type { PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
+import type { NotificationEvent, NotificationType, PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
 
 export const branches = sqliteTable("branches", {
   id: text().primaryKey(),
@@ -233,4 +233,37 @@ export const trackingEvents = sqliteTable("tracking_events", {
   uniqueIndex("tracking_events_revision").on(table.shipmentId, table.revision),
   uniqueIndex("tracking_events_event").on(table.shipmentId, table.code, table.occurredAt),
   index("tracking_events_timeline").on(table.shipmentId, table.occurredAt, table.revision),
+])
+
+export const notificationRecipients = sqliteTable("notification_recipients", {
+  id: text().primaryKey().notNull(),
+  name: text().notNull(),
+  phone: text().notNull().unique(),
+  active: integer({ mode: "boolean" }).notNull(),
+  revision: integer().notNull().default(1),
+})
+
+export const notificationRules = sqliteTable("notification_rules", {
+  event: text().$type<NotificationType>().primaryKey().notNull(),
+  enabled: integer({ mode: "boolean" }).notNull(),
+  recipientIds: text("recipient_ids", { mode: "json" }).$type<string[]>().notNull(),
+})
+
+export const notificationOutbox = sqliteTable("notification_outbox", {
+  id: text().primaryKey().notNull(),
+  event: text().$type<NotificationEvent>().notNull(),
+  dedupeKey: text("dedupe_key").notNull().unique(),
+  occurredAt: integer("occurred_at").notNull(),
+  message: text().notNull(),
+  data: text({ mode: "json" }).$type<Record<string, string>>().notNull(),
+  recipients: text({ mode: "json" }).$type<{ id: string; revision: number }[]>().notNull(),
+  state: text().$type<"pending" | "sent" | "failed">().notNull().default("pending"),
+  attempts: integer().notNull().default(0),
+  nextAttemptAt: integer("next_attempt_at").notNull(),
+  leaseUntil: integer("lease_until"),
+  sentAt: integer("sent_at"),
+  lastError: text("last_error").$type<"connection" | "response" | "http" | "recipients">(),
+}, (table) => [
+  index("notification_pending").on(table.nextAttemptAt).where(sql`${table.state} = 'pending'`),
+  index("notification_history").on(table.occurredAt, table.id),
 ])

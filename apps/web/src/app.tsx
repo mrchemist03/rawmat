@@ -9,6 +9,7 @@ import { Materials, References } from "./catalogue"
 import { Audit } from "./audit"
 import { Purchases } from "./purchases"
 import { Shipments } from "./shipments"
+import { Notifications } from "./notifications"
 import { Turnstile } from "./turnstile"
 
 type Session = z.infer<typeof sessionViewSchema>
@@ -188,6 +189,7 @@ const navigation: Record<NavigationItem, { path: string; title: string }> = {
   materials: { path: "/materials", title: "المواد الأولية" },
   purchases: { path: "/purchases", title: "طلبات الشراء" },
   shipments: { path: "/shipments", title: "الشحنات" },
+  notifications: { path: "/notifications", title: "التنبيهات" },
   accounts: { path: "/accounts", title: "الحسابات" },
   branches: { path: "/branches", title: "الشعب" },
   references: { path: "/references", title: "القوائم المرجعية" },
@@ -233,6 +235,7 @@ function Workspace({ onLogout, busy, error }: { onLogout: () => void; busy: bool
         {current === "materials" && <Materials />}
         {current === "purchases" && <Purchases />}
         {current === "shipments" && <Shipments />}
+        {current === "notifications" && <Notifications />}
         {current === "references" && <References />}
         {current === "audit" && <Audit />}
         {current === "account" && <section className="surface"><h1>حسابي</h1><p>مرحبًا، <bdi>{profile.name}</bdi>.</p></section>}

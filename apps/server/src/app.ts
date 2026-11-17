@@ -14,6 +14,8 @@ import { registerManagement } from "./modules/management/routes.js"
 import { registerAudit } from "./modules/management/audit.js"
 import { registerPurchases } from "./modules/purchases/routes.js"
 import { registerShipments } from "./modules/shipments/routes.js"
+import { registerNotifications } from "./modules/notifications/routes.js"
+import type { NotificationDelivery } from "./modules/notifications/delivery.js"
 import type { TrackingProvider } from "./modules/shipments/tracking.js"
 
 const csp = [
@@ -37,7 +39,7 @@ export function buildApp(
   webRoot: string,
   logger = true,
   auth?: AuthOptions & { trustProxy: string | false; brandingRoot?: string;
-    shipmentTracking?: { provider: TrackingProvider; intervalMs?: number } },
+    shipmentTracking?: { provider: TrackingProvider; intervalMs?: number }; notificationDelivery?: NotificationDelivery },
 ) {
   const app = Fastify({
     logger,
@@ -115,6 +117,7 @@ export function buildApp(
       registerAudit(scope, access, auth.db)
       registerPurchases(scope, access, auth)
       registerShipments(scope, access, auth)
+      registerNotifications(scope, access, auth, auth.notificationDelivery)
       const meError = z.toJSONSchema(z.strictObject({ error: z.string() }))
       scope.get("/api/me", {
         schema: { response: { 200: z.toJSONSchema(meSchema), 401: meError, 403: meError } },
@@ -134,6 +137,7 @@ export function buildApp(
         ["/audit", "viewAudit"],
         ["/purchases", "viewWorkspace"],
         ["/shipments", "viewWorkspace"],
+        ["/notifications", "manageNotifications"],
       ] as const) {
         scope.get(path, async (request, reply) => {
           const principal = access.principal(request)

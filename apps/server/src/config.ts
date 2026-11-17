@@ -4,6 +4,7 @@ import ipaddr from "ipaddr.js"
 import { z } from "zod"
 import { defaultThresholds } from "./modules/catalogue/similarity.js"
 import { readAramexConfig } from "./modules/shipments/aramex.js"
+import { readNotificationDelivery } from "./modules/notifications/delivery.js"
 
 const appUrlSchema = z.url().transform((value) => new URL(value)).refine((url) => {
   const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
@@ -68,5 +69,6 @@ export function readServerConfig(env: NodeJS.ProcessEnv) {
     baseCurrency: purchaseCurrencySchema.parse(env.BASE_CURRENCY || "TRY"),
     aramex: trackingProvider === "aramex" ? readAramexConfig(env) : undefined,
     trackingIntervalMs: pollMinutes * 60_000,
+    notificationDelivery: readNotificationDelivery(env),
   }
 }

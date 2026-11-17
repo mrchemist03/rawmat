@@ -8,6 +8,7 @@ import { canTransition } from "./workflow.js"
 import { pricesFor, refreshMaterialCosts, writePrices } from "./costs.js"
 import { Quantity } from "../inventory/quantity.js"
 import { listActiveBranches } from "../inventory/repository.js"
+import { publishPurchase } from "../notifications/events.js"
 
 type Actor = { id: string; canCreate: boolean; canManage: boolean; canApprove: boolean; canViewCosts: boolean }
 type Connection = Pick<AppDatabase, "select" | "insert" | "update" | "delete">
@@ -158,9 +159,11 @@ export function createPurchaseRepository(db: AppDatabase, now: () => number) {
         const items = tx.select({ materialId: purchaseRequestItems.materialId, quantity: purchaseRequestItems.quantity })
           .from(purchaseRequestItems).where(eq(purchaseRequestItems.requestId, id)).all()
         if (!validReferences(tx, { ...row, items })) return "invalid_purchase_reference"
-        tx.update(purchaseRequests).set({ status: next, submittedAt: now(), revision: revision + 1 })
+        const occurredAt = now()
+        tx.update(purchaseRequests).set({ status: next, submittedAt: occurredAt, revision: revision + 1 })
           .where(eq(purchaseRequests.id, id)).run()
         audit(tx, actor, id, "purchase_submitted", { status: row.status, revision }, { status: next, revision: revision + 1 })
+        publishPurchase(tx, row, next, revision + 1, occurredAt)
         return "saved"
       }, { behavior: "immediate" })
     },
@@ -190,6 +193,7 @@ export function createPurchaseRepository(db: AppDatabase, now: () => number) {
         }
         audit(tx, actor, id, `purchase_${decision.status}`, { status: row.status, revision: row.revision },
           { status: decision.status, revision: nextRevision })
+        publishPurchase(tx, row, decision.status, nextRevision, occurredAt)
         return "saved"
       }, { behavior: "immediate" })
     },
@@ -236,6 +240,7 @@ export function createPurchaseRepository(db: AppDatabase, now: () => number) {
         tx.update(purchaseRequests).set({ status: next, revision: row.revision + 1 }).where(eq(purchaseRequests.id, id)).run()
         audit(tx, actor, id, "purchase_receipt", { status: row.status, revision: row.revision },
           { status: next, revision: row.revision + 1, itemCount: movements.length })
+        publishPurchase(tx, row, next, row.revision + 1, occurredAt)
         return "saved"
       }, { behavior: "immediate" })
     },

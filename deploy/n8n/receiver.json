@@ -1,0 +1,114 @@
+{
+  "name": "Rawmat signed notifications receiver",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rawmat-notifications",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "127a6945-ec03-4f9c-92dd-dd5fb9d9da27",
+      "name": "Rawmat Webhook",
+      "webhookId": "8f25ffea-de20-4c5f-a3a6-64d94cad1dac"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst headers = item.json.headers ?? {};\nconst stringHeader = (name) => typeof headers[name] === 'string' && headers[name].length <= 80 ? headers[name] : '';\nconst body = item.binary?.data ? await this.helpers.getBinaryDataBuffer(0, 'data') : Buffer.alloc(0);\nreturn [{ json: {\n  id: stringHeader('x-rawmat-event-id'),\n  timestamp: stringHeader('x-rawmat-timestamp'),\n  signature: stringHeader('x-rawmat-signature'),\n  body: body.length <= 8192 ? body.toString('base64') : '',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "68fcf683-2fca-4446-98c3-46a59d31d74f",
+      "name": "Prepare signed request"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM rawmat_notifications.accept($1, $2, $3, $4)",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $json.timestamp, $json.signature, $json.body] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        480,
+        0
+      ],
+      "id": "3d1a5695-5fd8-4ff7-9956-e63776234e3c",
+      "name": "Verify and persist"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.accepted === true ? { accepted: true, id: $json.id } : { accepted: false } }}",
+        "options": {
+          "responseCode": "={{ $json.status_code }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        720,
+        0
+      ],
+      "id": "0a97079e-ff01-409d-89ea-09b05622cf49",
+      "name": "Acknowledge receipt"
+    }
+  ],
+  "connections": {
+    "Rawmat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare signed request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare signed request": {
+      "main": [
+        [
+          {
+            "node": "Verify and persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify and persist": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  }
+}

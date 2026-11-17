@@ -7,6 +7,7 @@ import type { AppDatabase } from "../../db/database.js"
 import { auditLog, branches, materials, shipmentItems, shipments, stockMovements, trackingEvents, units } from "../../db/schema.js"
 import { Quantity } from "../inventory/quantity.js"
 import { branchBalance } from "../inventory/repository.js"
+import { publishLowStock, publishShipment } from "../notifications/events.js"
 import { trackingRefreshDelay, trackingState } from "./polling.js"
 import { canUpdateTracking, ManualProvider, trackingFinished } from "./tracking.js"
 import type { TrackingEvent } from "./tracking.js"
@@ -116,16 +117,20 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         if (selectedBranches.length !== 2) return "invalid_shipment_reference"
         const id = randomUUID()
         const movements: StockRow[] = []
+        const lowStock: { id: string; code: string; name: string }[] = []
         const items: (typeof shipmentItems.$inferInsert)[] = []
         const occurredAt = now()
         for (const [position, inputItem] of input.items.entries()) {
           const itemId = randomUUID()
           const quantity = new Quantity(inputItem.quantity)
           if (inputItem.kind === "material") {
-            const material = tx.select({ id: materials.id }).from(materials)
+            const material = tx.select({ id: materials.id, name: materials.name, code: materials.code,
+              minimumQuantity: materials.minimumQuantity }).from(materials)
               .where(and(eq(materials.id, inputItem.materialId), eq(materials.archived, false))).get()
             if (!material) return "invalid_shipment_reference"
-            if (branchBalance(tx, material.id, input.sourceId).lt(quantity)) return "insufficient_stock"
+            const balance = branchBalance(tx, material.id, input.sourceId)
+            if (balance.lt(quantity)) return "insufficient_stock"
+            if (balance.gte(material.minimumQuantity) && balance.minus(quantity).lt(material.minimumQuantity)) lowStock.push(material)
             movements.push({ id: randomUUID(), branchId: input.sourceId, materialId: material.id,
               quantity: quantity.negated().toFixed(), kind: "shipment_dispatch", referenceId: id, referenceItemId: itemId,
               referenceRevision: 1, occurredAt })
@@ -138,7 +143,9 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         tx.insert(shipments).values({ ...fields, id, createdAt: occurredAt, createdBy: actor.id }).run()
         tx.insert(shipmentItems).values(items).run()
         if (movements.length) tx.insert(stockMovements).values(movements).run()
-        addEvent(tx, id, 1, provider.event("registered", "سُجّلت الشحنة", selectedBranches.find((row) => row.id === input.sourceId)?.name ?? "", occurredAt))
+        const sourceName = selectedBranches.find((row) => row.id === input.sourceId)?.name ?? ""
+        addEvent(tx, id, 1, provider.event("registered", "سُجّلت الشحنة", sourceName, occurredAt))
+        for (const material of lowStock) publishLowStock(tx, material, id, sourceName, occurredAt)
         audit(tx, actor, id, "shipment_created", { itemCount: items.length })
         return { id, duplicate: false }
       }, { behavior: "immediate" })
@@ -159,6 +166,7 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         tx.update(shipments).set({ revision, status: input.status, trackingChangedAt: now() }).where(eq(shipments.id, id)).run()
         addEvent(tx, id, revision, event)
         audit(tx, actor, id, "shipment_tracking_updated", { status: input.status, revision })
+        publishShipment(tx, row, input.status, revision, event.occurredAt)
         return "saved"
       }, { behavior: "immediate" })
     },
@@ -203,6 +211,7 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         addEvent(tx, id, revision, { ...provider.event(status, returned ? "تأكّد استلام المرتجع" : "تأكّد الاستلام في الوجهة", location, occurredAt),
           code: returned ? "manual:return_confirmed" : "manual:receipt_confirmed" })
         audit(tx, actor, id, "shipment_received", { status, revision, itemCount: items.length })
+        publishShipment(tx, row, status, revision, occurredAt)
         return "saved"
       }, { behavior: "immediate" })
     },

@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gt, isNull, lte, or, sql } from "drizzle-orm"
 import { z } from "zod"
 import type { AppDatabase } from "../../db/database.js"
 import { auditLog, shipments, trackingEvents } from "../../db/schema.js"
+import { publishShipment } from "../notifications/events.js"
 import { canUpdateTracking, trackingFinished, trackingResultSchema } from "./tracking.js"
 import type { TrackingProvider, TrackingResult } from "./tracking.js"
 
@@ -82,6 +83,7 @@ export function createTrackingPoller(db: AppDatabase, provider: TrackingProvider
         .where(eq(shipments.id, row.id)).run()
       if (status !== row.status) tx.insert(auditLog).values({ id: randomUUID(), entity: "shipment", entityId: row.id,
         action: "shipment_tracking_synced", occurredAt: time, before: { status: row.status }, after: { status } }).run()
+      publishShipment(tx, row, status, revision, time)
     }, { behavior: "immediate" })
   }
 

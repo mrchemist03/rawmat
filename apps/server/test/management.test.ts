@@ -79,9 +79,9 @@ test("grants purchase approvals to the intended roles and keeps management restr
 
 test("returns only name and navigation for each role and withholds management routes", async () => {
   expect((await get("/api/me", manager)).json()).toEqual({
-    name: accountName, navigation: ["account", "materials", "purchases", "shipments", "accounts", "branches", "references", "audit"],
+    name: accountName, navigation: ["account", "materials", "purchases", "shipments", "notifications", "accounts", "branches", "references", "audit"],
   })
-  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account", "materials", "purchases", "shipments"] })
+  expect((await get("/api/me", admin)).json()).toEqual({ name: "Admin fixture", navigation: ["account", "materials", "purchases", "shipments", "notifications"] })
   expect((await get("/api/me", basic)).json()).toEqual({ name: "Basic fixture", navigation: ["account", "materials", "purchases", "shipments"] })
   expect((await get("/api/me")).statusCode).toBe(401)
   for (const cookie of [undefined, admin, basic]) {
@@ -93,6 +93,24 @@ test("returns only name and navigation for each role and withholds management ro
   expect((await get("/api/me", pending)).statusCode).toBe(403)
   expect((await get("/api/manage/accounts", pending)).statusCode).toBe(404)
   expect((await write("/api/manage/branches", basic, { name: "Test", city: "Test" })).statusCode).toBe(404)
+})
+
+test("keeps notification phone numbers and configuration behind administrative permissions", async () => {
+  const phone = "+12025550123"
+  const path = "/api/notifications"
+  expect((await get("/notifications", basic)).statusCode).toBe(404)
+  expect((await get(path, basic)).statusCode).toBe(404)
+  expect((await get(path + "/history", basic)).statusCode).toBe(404)
+  expect((await write(path + "/recipients", basic, { name: "Fixture", phone, active: true })).statusCode).toBe(404)
+  expect((await write(path + "/recipients", admin, { name: "Fixture", phone: "not a phone", active: true })).statusCode).toBe(400)
+  expect((await write(path + "/recipients", admin, { name: "Fixture", phone, active: true })).statusCode).toBe(204)
+  const saved = (await get(path, admin)).json()
+  expect(saved).toMatchObject({ configured: false, recipients: [{ phone, active: true }] })
+  const rulePath = path + "/rules/purchase.submitted"
+  expect((await write(rulePath, admin, { enabled: true, recipientIds: [] }, "PUT")).statusCode).toBe(400)
+  expect((await write(rulePath, admin, { enabled: true, recipientIds: [saved.recipients[0].id] }, "PUT")).statusCode).toBe(204)
+  expect((await write(path + "/recipients/" + saved.recipients[0].id + "/test", admin, {})).statusCode).toBe(409)
+  expect((await get(path + "/history", admin)).json()).toEqual({ items: [], total: 0 })
 })
 
 test("manages accounts and branches, revokes altered sessions and audits writes", async () => {
@@ -134,7 +152,7 @@ test("manages accounts and branches, revokes altered sessions and audits writes"
   expect((await write(`/api/manage/accounts/${ids.manager}`, manager, {
     name: accountName, loginName: "manager.fixture", branchId: null, active: true, accountType: "user",
   }, "PUT")).json()).toEqual({ error: "protected_account" })
-  const audit = database.db.select().from(auditLog).all()
+  const audit = database.db.select().from(auditLog).all().filter(({ entity }) => entity === "branch" || entity === "user")
   expect(audit.map((record) => record.action)).toEqual(["branch_created", "account_created", "account_updated", "branch_updated"])
   expect(audit.every((record) => record.actorId === ids.manager)).toBe(true)
 })

@@ -94,6 +94,10 @@ docker compose --env-file deploy/.env -f deploy/compose.yml exec app /nodejs/bin
 
 لتخصيص الشعار، ضع ملف PNG بحجم لا يتجاوز 512 كيلوبايت وأبعاد لا تتجاوز 2048 بكسل في `deploy/branding/logo.png`. يظهر الملف الجديد عند إعادة تحميل الصفحة، ويعرض التطبيق شعاره الافتراضي عند غياب الملف. يُخدم خط Tajawal من الحاوية بصيغة WOFF2. [ترخيص الخط SIL OFL](https://github.com/googlefonts/tajawal/blob/main/OFL.txt)
 
+## التنبيهات عبر n8n
+
+يتاح ضبط التنبيهات للأدمن والسوبر يوزر من شاشة **التنبيهات**. يرسل Rawmat التنبيهات في الخلفية إلى n8n عبر Webhook موقّع، ويحفظ سجل المحاولات. تُضبط وجهة HTTPS ومفتاح التوقيع على الخادم عبر `N8N_WEBHOOK_URL` و`N8N_WEBHOOK_SECRET`. يتضمن دليل التكامل قالب استقبال يحفظ الطلبات في PostgreSQL ويقرّ بالاستلام بعد الحفظ. [إعداد n8n](deploy/n8n/README.md)
+
 ## الأمان
 
 راجع [سياسة الإبلاغ الأمني](SECURITY.md). احتفظ بإعدادات التشغيل الفعلية في `deploy/.env` على الخادم. لتفعيل فحص الملفات المرحّلة قبل الالتزام، ثبّت Gitleaks على `PATH` ثم نفّذ `git config core.hooksPath .githooks` في نسخة العمل.

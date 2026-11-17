@@ -26,6 +26,8 @@ const actions: Record<string, string> = {
   shipment_created: "تسجيل شحنة",
   shipment_tracking_updated: "تحديث تتبع شحنة",
   shipment_tracking_synced: "مزامنة تتبع شحنة",
+  notification_recipient_saved: "حفظ مستلم تنبيهات",
+  notification_rule_saved: "حفظ إعداد تنبيه",
   shipment_received: "تأكيد استلام شحنة",
   reference_created: "إضافة سجل مرجعي",
   reference_updated: "تعديل سجل مرجعي",
