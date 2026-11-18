@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
 import { addAbortListener } from "node:events"
-import { and, asc, desc, eq, gt, isNull, lte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, isNull, lte, ne, or, sql } from "drizzle-orm"
 import { z } from "zod"
 import type { AppDatabase } from "../../db/database.js"
 import { auditLog, shipments, trackingEvents } from "../../db/schema.js"
 import { publishShipment } from "../notifications/events.js"
-import { canUpdateTracking, trackingFinished, trackingResultSchema } from "./tracking.js"
+import { canUpdateTracking, isTrackingProgress, trackingFinished, trackingResultSchema } from "./tracking.js"
 import type { TrackingProvider, TrackingResult } from "./tracking.js"
 
 const minute = 60_000
@@ -72,12 +72,26 @@ export function createTrackingPoller(db: AppDatabase, provider: TrackingProvider
         const inserted = tx.insert(trackingEvents).values({ ...fields, status: carrierStatus ?? status, code: `carrier:${code}`, id: randomUUID(),
           shipmentId: row.id, revision: revision + 1, source: "carrier" })
           .onConflictDoNothing({ target: [trackingEvents.shipmentId, trackingEvents.code, trackingEvents.occurredAt] }).run()
-        if (!inserted.changes) continue
-        revision++
-        if (event.occurredAt >= (previous?.occurredAt ?? 0)) {
-          changed = true
-          if (carrierStatus && canUpdateTracking(status, carrierStatus)) status = carrierStatus
+        if (inserted.changes) revision++
+        else if (carrierStatus) {
+          const corrected = tx.update(trackingEvents).set({ status: carrierStatus }).where(and(
+            eq(trackingEvents.shipmentId, row.id), eq(trackingEvents.source, "carrier"),
+            eq(trackingEvents.code, `carrier:${code}`), eq(trackingEvents.occurredAt, event.occurredAt),
+            ne(trackingEvents.status, carrierStatus),
+          )).run()
+          if (corrected.changes) revision++
         }
+        const latest = event.occurredAt >= (previous?.occurredAt ?? 0)
+        if (inserted.changes && latest) changed = true
+        // Re-read known events so newly supported descriptions repair older unclassified shipments.
+        if (carrierStatus && (latest || isTrackingProgress(status, carrierStatus)) &&
+          canUpdateTracking(status, carrierStatus)) {
+          status = carrierStatus
+        }
+      }
+      if (status !== row.status) {
+        changed = true
+        if (revision === row.revision) revision++
       }
       tx.update(shipments).set({ revision, status, nextPollAt: time + intervalMs, pollLeaseUntil: null,
         lastPolledAt: time, pollFailures: 0, ...(changed ? { trackingChangedAt: time } : {}) })

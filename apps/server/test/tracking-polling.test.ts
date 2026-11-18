@@ -6,6 +6,7 @@ import { auditLog, branches, notificationOutbox, notificationRecipients, notific
   stockMovements, trackingEvents, users } from "../src/db/schema.js"
 import { createTrackingPoller, trackingIdleLimit, trackingState } from "../src/modules/shipments/polling.js"
 import { createShipmentRepository } from "../src/modules/shipments/repository.js"
+import { createAramexProvider, readAramexConfig } from "../src/modules/shipments/aramex.js"
 import type { TrackingProvider, TrackingResult } from "../src/modules/shipments/tracking.js"
 
 const awb = "FIXTURE001"
@@ -154,4 +155,70 @@ test.each([
   time += interval
   await worker.run()
   expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(1)
+})
+
+test("reconciles saved unclassified Aramex events and progresses automatically through transit and delivery", async () => {
+  const recipient = randomUUID()
+  stored.db.insert(notificationRecipients).values({ id: recipient, name: "Fixture", phone: "+12025550111", active: true }).run()
+  stored.db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
+  const initial = [
+    { code: "ORIGIN_FIXTURE", description: "Received at Origin Facility", occurredAt: milestone - 30 },
+    { code: "PAYMENT_FIXTURE", description: "Shipment charges paid", occurredAt: milestone - 20 },
+    { code: "SMS_FIXTURE", description: "SMS Sent to Consignee", occurredAt: milestone - 10 },
+  ]
+  const legacy = createTrackingPoller(stored.db, { track: async () => [{
+    awb, events: initial.map((event) => ({ ...event, status: null, location: "" })),
+  }] }, () => time)
+  await legacy.run()
+  expect(shipment().status).toBe("registered")
+  const config = readAramexConfig({
+    ARAMEX_USERNAME: "fixture@example.invalid", ARAMEX_PASSWORD: "fixture",
+    ARAMEX_ACCOUNT_NUMBER: "001", ARAMEX_ACCOUNT_PIN: "fixture",
+    ARAMEX_ACCOUNT_ENTITY: "TEST", ARAMEX_ACCOUNT_COUNTRY_CODE: "TR", ARAMEX_PROTOCOL: "json",
+  })
+  const history = [...initial]
+  const http = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({
+    HasErrors: false, TrackingResults: [{ Key: awb, Value: history.map((event) => ({
+      WaybillNumber: awb, UpdateCode: event.code, UpdateDescription: event.description,
+      UpdateDateTime: new Date(event.occurredAt).toISOString(), UpdateLocation: "Fixture",
+    })) }],
+  }))
+  const worker = createTrackingPoller(stored.db, createAramexProvider(config, http), () => time)
+  time += interval
+  await worker.run()
+  expect(shipment().status).toBe("in_transit")
+  expect(stored.db.select().from(trackingEvents).all().find(({ code }) => code === "carrier:ORIGIN_FIXTURE")?.status).toBe("in_transit")
+  const revision = shipment().revision
+  const activity = shipment().trackingChangedAt
+  time += interval
+  await worker.run()
+  expect(shipment()).toMatchObject({ revision, trackingChangedAt: activity })
+  expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(1)
+  history.push({ code: "SCHEDULE_FIXTURE", description: "Delivery Scheduled", occurredAt: time + interval - 5 })
+  time += interval
+  await worker.run()
+  expect(shipment().status).toBe("in_transit")
+  history.push({ code: "DELIVERED_FIXTURE", description: "Shipment Delivered", occurredAt: time + interval - 5 },
+    { code: "PAID_AFTER_FIXTURE", description: "Shipment charges paid", occurredAt: time + interval - 1 })
+  time += interval
+  await worker.run()
+  expect(shipment()).toMatchObject({ status: "delivered", receivedAt: null })
+  expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(2)
+  expect(stored.db.select().from(stockMovements).all()).toHaveLength(0)
+  const attempts = http.mock.calls.length
+  time += interval
+  await worker.run()
+  expect(http).toHaveBeenCalledTimes(attempts)
+})
+
+test("an older exception cannot replace a newer carrier movement", async () => {
+  const event = { code: "MOVEMENT_FIXTURE", status: "in_transit" as const, description: "In transit",
+    occurredAt: milestone - 10, location: "" }
+  const track = vi.fn<TrackingProvider["track"]>().mockResolvedValueOnce([{ awb, events: [event] }])
+    .mockResolvedValueOnce([{ awb, events: [{ ...event, code: "OLD_EXCEPTION", status: "exception", occurredAt: milestone - 20 }] }])
+  const worker = createTrackingPoller(stored.db, { track }, () => time)
+  await worker.run()
+  time += interval
+  await worker.run()
+  expect(shipment().status).toBe("in_transit")
 })

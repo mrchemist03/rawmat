@@ -125,11 +125,18 @@ function one(node: Element | undefined, uri: string, local: string) {
 }
 
 const descriptions = new Map<string, ShipmentStatus>([
-  ["shipment information received", "registered"], ["shipment created", "registered"],
+  ["shipment information received", "registered"], ["shipment created", "registered"], ["record created", "registered"],
   ["picked up", "picked_up"], ["shipment picked up", "picked_up"], ["استلمها الناقل", "picked_up"],
+  ["picked up from shipper", "picked_up"],
   ["in transit", "in_transit"], ["shipment in transit", "in_transit"], ["في الطريق", "in_transit"],
+  ["received at origin facility", "in_transit"], ["shipment received at origin facility", "in_transit"],
+  ["shipment received at aramex origin sorting facility", "in_transit"],
+  ["received at destination facility", "in_transit"], ["shipment received at destination facility", "in_transit"],
+  ["departed operations facility - in transit", "in_transit"], ["delivery scheduled", "in_transit"],
   ["out for delivery", "out_for_delivery"], ["shipment out for delivery", "out_for_delivery"], ["خرجت للتوصيل", "out_for_delivery"],
   ["delivered", "delivered"], ["shipment delivered", "delivered"], ["shipment has been delivered", "delivered"], ["تم التسليم", "delivered"],
+  ["shipment was delivered", "delivered"], ["shipment delivered successfully", "delivered"],
+  ["delivered to consignee", "delivered"], ["تم تسليم الشحنة", "delivered"],
   ["delivery attempted", "exception"], ["delivery failed", "exception"], ["تعذر التسليم", "exception"],
   ["returned to sender", "returned"], ["shipment returned to sender", "returned"], ["تم الإرجاع إلى المرسل", "returned"],
 ])
@@ -157,7 +164,8 @@ function trackingEvent(row: AramexEvent, awb: string, config: AramexConfig) {
   if (!waybill.success || waybill.data !== awb || !codePattern.test(code) || !Number.isSafeInteger(occurredAt)) {
     throw new Error("Invalid tracking event")
   }
-  const normalized = description.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").replace(/[.!。]+$/u, "").trim()
+  const normalized = description.normalize("NFKC").toLowerCase().replace(/[‐‑‒–—]/gu, "-")
+    .replace(/\s+/gu, " ").replace(/[.!。]+$/u, "").trim()
   const status = Object.hasOwn(config.statusMap, code) ? config.statusMap[code]! : descriptions.get(normalized) ?? null
   return {
     status, code, description: description.slice(0, 500) || code, location: location.slice(0, 120),

@@ -34,6 +34,10 @@ export class ManualProvider implements TrackingProvider {
 
 const progress: ShipmentStatus[] = ["registered", "picked_up", "in_transit", "out_for_delivery", "delivered"]
 
+export function isTrackingProgress(current: ShipmentStatus, next: ShipmentStatus) {
+  return progress.includes(current) && progress.indexOf(next) > progress.indexOf(current)
+}
+
 export function canUpdateTracking(current: ShipmentStatus, next: ShipmentStatus) {
   if (current === "returned" || current === "delivered" || next === "registered") return false
   if (next === "exception" || next === "returned" || current === "exception") return true

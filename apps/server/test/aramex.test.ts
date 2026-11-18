@@ -126,3 +126,34 @@ test("reports HTTP rejection and invalid JSON without disclosing the response bo
   await expect(provider.track([awb], signal)).rejects.toMatchObject({ reason: "format" })
   expect(http).toHaveBeenCalledTimes(4)
 })
+
+test.each(["soap", "json"])("maps carrier movement and delivery descriptions through the %s entry point", async (protocol) => {
+  const cases = [
+    ["Record created", "registered"],
+    ["Picked up from shipper", "picked_up"],
+    ["Received at Origin Facility", "in_transit"],
+    ["Shipment received at Aramex origin sorting facility", "in_transit"],
+    ["Delivery Scheduled", "in_transit"],
+    ["Departed Operations facility – In Transit", "in_transit"],
+    ["Shipment Out for Delivery", "out_for_delivery"],
+    ["Shipment Delivered", "delivered"],
+    ["Shipment delivered successfully", "delivered"],
+    ["تم تسليم الشحنة", "delivered"],
+    ["Delivery attempted", "exception"],
+    ["Shipment charges paid", null],
+    ["SMS Sent to Consignee", null],
+    ["Delivery not completed", null],
+  ] as const
+  const rows = cases.map(([description], index) => ({
+    WaybillNumber: awb, UpdateCode: "FIXTURE_" + index, UpdateDescription: description,
+    UpdateDateTime: "2026-11-14T12:00:00Z", UpdateLocation: "Fixture",
+  }))
+  const body = protocol === "json"
+    ? Response.json({ HasErrors: false, TrackingResults: [{ Key: awb, Value: rows }] })
+    : new Response(response(item(awb, rows.map((row) =>
+      event(awb, row.UpdateCode, row.UpdateDescription, row.UpdateDateTime)).join(""))))
+  const provider = createAramexProvider(readAramexConfig({ ...env, ARAMEX_PROTOCOL: protocol }),
+    vi.fn<typeof fetch>().mockResolvedValue(body))
+  const result = await provider.track([awb], signal)
+  expect(result[0]?.events.map(({ description, status }) => [description, status])).toEqual(cases)
+})
