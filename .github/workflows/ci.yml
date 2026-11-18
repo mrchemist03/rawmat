@@ -72,6 +72,19 @@ jobs:
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/shipments)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/notifications)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/overview/export)" = 404
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'))
+          const matches = Object.entries(lock.packages).filter(([path]) => path.endsWith('/picomatch'))
+          assert(matches.length > 0)
+          for (const [, dependency] of matches) {
+            assert.equal(dependency.version, '4.0.7')
+            assert.equal(dependency.dev, true)
+          }
+          NODE
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            rawmat:dev -e "try { require.resolve('picomatch'); process.exitCode = 1 } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error }"
 
       - name: Restore a live SQLite snapshot in a separate volume
         shell: bash
@@ -98,7 +111,8 @@ jobs:
             echo 'bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf  trivy.tar.gz' | sha256sum -c -
             tar -xzf trivy.tar.gz trivy
           )
-          "$tool_dir/trivy" fs --scanners vuln --include-dev-deps --severity HIGH,CRITICAL --exit-code 1 package-lock.json
+          "$tool_dir/trivy" fs --vex deploy/security/build-dependencies.vex.json \
+            --show-suppressed --scanners vuln --include-dev-deps --severity HIGH,CRITICAL --exit-code 1 package-lock.json
           "$tool_dir/trivy" image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 rawmat:dev
           "$tool_dir/trivy" image --format cyclonedx --output "$RUNNER_TEMP/rawmat-image.cdx.json" rawmat:dev
           "$tool_dir/trivy" fs --include-dev-deps --format cyclonedx --output "$RUNNER_TEMP/rawmat-npm.cdx.json" package-lock.json

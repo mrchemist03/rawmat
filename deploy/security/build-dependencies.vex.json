@@ -1,0 +1,16 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/mrchemist03/rawmat/blob/main/deploy/security/build-dependencies.vex.json",
+  "author": "https://github.com/mrchemist03/rawmat",
+  "timestamp": "2026-11-18T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "name": "CVE-2026-112366" },
+      "products": [{ "@id": "pkg:npm/picomatch@4.0.7" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "Applies only to the Rawmat development lockfile scan. Picomatch 4.0.7 is a development-only dependency of Vite, Vitest and their file discovery tools. These tools process repository-controlled build and test patterns. Rawmat HTTP, shipment, import and webhook inputs never become glob patterns. CI checks that this exact version remains development-only and that picomatch cannot be resolved in the runtime image. The runtime image vulnerability scan does not apply this VEX. Reassess this statement when adding dynamic glob inputs or upgrading the tooling dependency."
+    }
+  ]
+}
