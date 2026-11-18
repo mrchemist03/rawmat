@@ -1,0 +1,1 @@
+ALTER TABLE `tracking_events` ADD `carrier_status` text;

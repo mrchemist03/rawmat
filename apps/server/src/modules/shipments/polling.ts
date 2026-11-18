@@ -5,7 +5,7 @@ import { z } from "zod"
 import type { AppDatabase } from "../../db/database.js"
 import { auditLog, shipments, trackingEvents } from "../../db/schema.js"
 import { publishShipment } from "../notifications/events.js"
-import { canUpdateTracking, isTrackingProgress, trackingFinished, trackingResultSchema } from "./tracking.js"
+import { trackingFinished, trackingResultSchema } from "./tracking.js"
 import type { TrackingProvider, TrackingResult } from "./tracking.js"
 
 const minute = 60_000
@@ -60,39 +60,52 @@ export function createTrackingPoller(db: AppDatabase, provider: TrackingProvider
         return
       }
 
-      const previous = tx.select({ occurredAt: trackingEvents.occurredAt }).from(trackingEvents)
+      const previous = tx.select().from(trackingEvents)
         .where(and(eq(trackingEvents.shipmentId, row.id), eq(trackingEvents.source, "carrier")))
-        .orderBy(desc(trackingEvents.occurredAt)).limit(1).get()
+        .orderBy(desc(trackingEvents.occurredAt), desc(trackingEvents.revision)).limit(1).get()
       let revision = row.revision
-      let status = row.status
-      let changed = false
       const events = [...result.events].sort((first, second) => first.occurredAt - second.occurredAt)
       for (const event of events) {
         const { code, status: carrierStatus, ...fields } = event
-        const inserted = tx.insert(trackingEvents).values({ ...fields, status: carrierStatus ?? status, code: `carrier:${code}`, id: randomUUID(),
+        const inserted = tx.insert(trackingEvents).values({ ...fields, carrierStatus, status: carrierStatus ?? row.status, code: `carrier:${code}`, id: randomUUID(),
           shipmentId: row.id, revision: revision + 1, source: "carrier" })
           .onConflictDoNothing({ target: [trackingEvents.shipmentId, trackingEvents.code, trackingEvents.occurredAt] }).run()
         if (inserted.changes) revision++
-        else if (carrierStatus) {
-          const corrected = tx.update(trackingEvents).set({ status: carrierStatus }).where(and(
+        else {
+          const corrected = tx.update(trackingEvents).set({ carrierStatus, description: fields.description,
+            location: fields.location, raw: fields.raw }).where(and(
             eq(trackingEvents.shipmentId, row.id), eq(trackingEvents.source, "carrier"),
             eq(trackingEvents.code, `carrier:${code}`), eq(trackingEvents.occurredAt, event.occurredAt),
-            ne(trackingEvents.status, carrierStatus),
+            or(sql`${trackingEvents.carrierStatus} is not ${carrierStatus}`,
+              ne(trackingEvents.description, fields.description), ne(trackingEvents.location, fields.location)),
           )).run()
           if (corrected.changes) revision++
         }
-        const latest = event.occurredAt >= (previous?.occurredAt ?? 0)
-        if (inserted.changes && latest) changed = true
-        // Re-read known events so newly supported descriptions repair older unclassified shipments.
-        if (carrierStatus && (latest || isTrackingProgress(status, carrierStatus)) &&
-          canUpdateTracking(status, carrierStatus)) {
-          status = carrierStatus
+      }
+
+      // Carrier time determines the current state, including a newer correction to an earlier stage.
+      // Keep the explicit classification separate from the status inherited by informational events.
+      const timeline = tx.select().from(trackingEvents)
+        .where(and(eq(trackingEvents.shipmentId, row.id), eq(trackingEvents.source, "carrier")))
+        .orderBy(asc(trackingEvents.occurredAt), asc(trackingEvents.revision)).all()
+      let status: Shipment["status"] = "registered"
+      let classified = false
+      let correctedTimeline = false
+      for (const event of timeline) {
+        if (event.carrierStatus !== null) {
+          status = event.carrierStatus
+          classified = true
+        }
+        if (classified && event.status !== status) {
+          tx.update(trackingEvents).set({ status }).where(eq(trackingEvents.id, event.id)).run()
+          correctedTimeline = true
         }
       }
-      if (status !== row.status) {
-        changed = true
-        if (revision === row.revision) revision++
-      }
+      if (!classified) status = row.status
+      const latest = timeline.at(-1)
+      const changed = status !== row.status || latest?.id !== previous?.id ||
+        latest?.description !== previous?.description || latest?.location !== previous?.location
+      if ((status !== row.status || correctedTimeline) && revision === row.revision) revision++
       tx.update(shipments).set({ revision, status, nextPollAt: time + intervalMs, pollLeaseUntil: null,
         lastPolledAt: time, pollFailures: 0, ...(changed ? { trackingChangedAt: time } : {}) })
         .where(eq(shipments.id, row.id)).run()

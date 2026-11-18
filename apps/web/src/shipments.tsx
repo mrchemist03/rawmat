@@ -144,13 +144,15 @@ function ShipmentAction({ item, action, onClose, onSaved }: {
 
   return <form className="purchase-operation" onSubmit={submit}>
     {action === "tracking" ? <>
-      <h3>تحديث الحالة من الناقل</h3>
+      <h3>تحديث يدوي للحالة</h3>
       <label>حالة الشحنة<select name="status" defaultValue={item.status === "registered" ? "in_transit" : item.status}>
         {shipmentStatus.options.filter((value) => value !== "registered").map((value) =>
           <option key={value} value={value}>{labels[value]}</option>)}
       </select></label>
-      <label>الموقع<input name="location" maxLength={120} /></label>
-      <label>وصف الحدث<textarea name="description" maxLength={500} required /></label>
+      <label>الموقع<input name="location" maxLength={120} defaultValue={item.lastEvent.location} /></label>
+      <label><span id="shipment-description-label">وصف الحالة</span>
+        <textarea name="description" aria-labelledby="shipment-description-label" maxLength={500} required defaultValue={item.lastEvent.description} />
+      </label>
     </> : <>
       <h3>{item.status === "returned" ? "تأكيد الاستلام في المصدر" : "تأكيد الاستلام في الوجهة"}</h3>
       <p>أدخل الكمية التي وصلت لكل بند. سجّل 0 للبند الذي لم يصل. يغلق التأكيد الشحنة.</p>
@@ -186,6 +188,9 @@ function ShipmentDetails({ item, onClose, onEdit, changed }: {
   return <section className="editor">
     <h2>الشحنة <bdi>{item.trackingNumber}</bdi></h2>
     <p>{item.sourceName} ← {item.destinationName} · {labels[item.status]} · <bdi>{item.dispatchedOn}</bdi></p>
+    <p><strong>وصف الحالة:</strong> {item.lastEvent.description}</p>
+    <p><strong>الموقع:</strong> {item.lastEvent.location || "لم يحدده الناقل"}</p>
+    <p>وقت آخر حدث · <bdi>{dateTime.format(item.lastEvent.occurredAt)}</bdi></p>
     {item.receivedAt !== null && <p role="status">الاستلام مؤكّد · <bdi>{dateTime.format(item.receivedAt)}</bdi></p>}
     {item.tracking?.lastPolledAt != null && <p>آخر تحديث ناجح · <bdi>{dateTime.format(item.tracking.lastPolledAt)}</bdi></p>}
     {item.tracking && trackingNotes[item.tracking.state] && <p role="status">{trackingNotes[item.tracking.state]}</p>}

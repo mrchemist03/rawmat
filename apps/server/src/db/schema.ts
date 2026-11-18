@@ -224,6 +224,7 @@ export const trackingEvents = sqliteTable("tracking_events", {
   id: text().primaryKey().notNull(),
   shipmentId: text("shipment_id").notNull().references(() => shipments.id),
   status: text().$type<ShipmentStatus>().notNull(),
+  carrierStatus: text("carrier_status").$type<ShipmentStatus>(),
   code: text().notNull(),
   description: text().notNull(),
   location: text().notNull().default(""),

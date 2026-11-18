@@ -187,6 +187,9 @@ test("reconciles saved unclassified Aramex events and progresses automatically t
   time += interval
   await worker.run()
   expect(shipment().status).toBe("in_transit")
+  expect(repo.detail(actor, id)?.lastEvent).toMatchObject({
+    description: "أُرسلت رسالة نصية إلى المستلم", location: "Fixture", status: "in_transit",
+  })
   expect(stored.db.select().from(trackingEvents).all().find(({ code }) => code === "carrier:ORIGIN_FIXTURE")?.status).toBe("in_transit")
   const revision = shipment().revision
   const activity = shipment().trackingChangedAt
@@ -221,4 +224,85 @@ test("an older exception cannot replace a newer carrier movement", async () => {
   time += interval
   await worker.run()
   expect(shipment().status).toBe("in_transit")
+})
+
+test("uses the newest carrier time for status, description and location across unordered and partial responses", async () => {
+  const recipient = randomUUID()
+  stored.db.insert(notificationRecipients).values({ id: recipient, name: "Fixture", phone: "+12025550111", active: true }).run()
+  stored.db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
+  const departure = { status: "out_for_delivery" as const, code: "VAN_FIXTURE", description: "Out for delivery",
+    location: "Destination depot", occurredAt: milestone - 30 }
+  const newer = { status: "in_transit" as const, code: "HUB_FIXTURE", description: "In transit",
+    location: "Sorting hub", occurredAt: milestone - 20 }
+  const information = { status: null, code: "SMS_FIXTURE", description: "SMS Sent to Consignee",
+    location: "Recipient city", occurredAt: milestone - 10 }
+  let events: TrackingResult["events"] = [departure]
+  const worker = createTrackingPoller(stored.db, { track: async () => [{ awb, events }] }, () => time)
+  await worker.run()
+  expect(shipment().status).toBe("out_for_delivery")
+  time += interval
+  events = [information, newer, departure]
+  await worker.run()
+  expect(repo.detail(actor, id)).toMatchObject({ status: "in_transit", lastEvent: {
+    status: "in_transit", description: "أُرسلت رسالة نصية إلى المستلم", location: "Recipient city", occurredAt: information.occurredAt,
+  } })
+  expect(repo.list({}).items[0]).toMatchObject({ status: "in_transit", lastEvent: {
+    description: "أُرسلت رسالة نصية إلى المستلم", location: "Recipient city",
+  } })
+  const revision = shipment().revision
+  const activity = shipment().trackingChangedAt
+  time += interval
+  events = [{ ...departure, status: "delivered", code: "OLDER_DELIVERY", occurredAt: milestone - 40 }]
+  await worker.run()
+  expect(shipment()).toMatchObject({ status: "in_transit", trackingChangedAt: activity })
+  expect(shipment().revision).toBeGreaterThan(revision)
+  expect(repo.detail(actor, id)?.lastEvent.location).toBe("Recipient city")
+  expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(2)
+  expect(stored.db.select().from(stockMovements).all()).toHaveLength(0)
+})
+
+test("updates corrected carrier text and location without duplicating events or unchanged notifications", async () => {
+  const original = { status: "in_transit" as const, code: "HUB_FIXTURE", description: "In transit",
+    location: "Old hub", occurredAt: milestone - 10 }
+  let event: TrackingResult["events"][number] = original
+  const worker = createTrackingPoller(stored.db, { track: async () => [{ awb, events: [event] }] }, () => time)
+  await worker.run()
+  const eventId = repo.detail(actor, id)?.lastEvent.id
+  const revision = shipment().revision
+  time += interval
+  event = { ...original, description: "Received at Destination Facility", location: "Corrected hub" }
+  await worker.run()
+  expect(repo.detail(actor, id)).toMatchObject({ status: "in_transit", lastEvent: {
+    id: eventId, description: "تم استلام الشحنة في مركز الوجهة", location: "Corrected hub",
+  } })
+  expect(shipment()).toMatchObject({ revision: revision + 1, trackingChangedAt: time })
+  time += interval
+  event = { ...event, location: "" }
+  await worker.run()
+  expect(repo.detail(actor, id)?.lastEvent.location).toBe("")
+  const correctedRevision = shipment().revision
+  const activity = shipment().trackingChangedAt
+  time += interval
+  await worker.run()
+  expect(shipment()).toMatchObject({ revision: correctedRevision, trackingChangedAt: activity })
+  expect(stored.db.select().from(trackingEvents).all()).toHaveLength(2)
+})
+
+test("reclassifies a saved carrier event when Aramex corrects it and resolves equal times consistently", async () => {
+  const original = { status: "out_for_delivery" as const, code: "MOVEMENT_FIXTURE", description: "Out for delivery",
+    location: "Hub A", occurredAt: milestone - 10 }
+  let events: TrackingResult["events"] = [original]
+  const worker = createTrackingPoller(stored.db, { track: async () => [{ awb, events }] }, () => time)
+  await worker.run()
+  time += interval
+  events = [{ ...original, status: "exception", description: "Delivery failed", location: "Hub B" },
+    { ...original, code: "SAME_TIME_FIXTURE", status: "in_transit", description: "In transit", location: "Hub C" }]
+  await worker.run()
+  expect(repo.detail(actor, id)).toMatchObject({ status: "in_transit", lastEvent: { location: "Hub C" } })
+  const revision = shipment().revision
+  time += interval
+  events.reverse()
+  await worker.run()
+  expect(shipment()).toMatchObject({ status: "in_transit", revision })
+  expect(repo.detail(actor, id)?.lastEvent.location).toBe("Hub C")
 })
