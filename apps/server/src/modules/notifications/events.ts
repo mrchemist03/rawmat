@@ -3,7 +3,7 @@ import { shipmentStatusLabels, translateTrackingDescription } from "@rawmat/shar
 import type { NotificationEvent, NotificationType, PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
 import { and, asc, desc, eq, inArray, isNull, like, lt, lte, ne, notInArray, sql } from "drizzle-orm"
 import type { AppDatabase } from "../../db/database.js"
-import { materials, notificationOutbox, notificationRecipients, notificationRules, purchaseRequests,
+import { branches, materials, notificationOutbox, notificationRecipients, notificationRules, purchaseRequests,
   shipmentItems, shipments, trackingEvents, units } from "../../db/schema.js"
 import { supersededTrackingSource } from "../shipments/tracking.js"
 
@@ -65,7 +65,10 @@ function shipmentMessage(db: Connection, id: string, awb: string, fallback: stri
     .orderBy(sql`${trackingEvents.code} = 'manual:registered'`, desc(trackingEvents.occurredAt), desc(trackingEvents.revision)).get()
   const description = latest ? translateTrackingDescription(latest.description) : fallback
   const update = attention ? fallback + " · " + description : description
-  const header = "رقم الشحنة " + awb + "\nمحتويات الشحنة\n"
+  const destination = db.select({ name: branches.name }).from(shipments)
+    .innerJoin(branches, eq(branches.id, shipments.destinationId)).where(eq(shipments.id, id)).get()
+  const recipient = clip(oneLine(destination?.name ?? "شعبة غير محددة"), 120)
+  const header = "رقم الشحنة " + awb + "\nاسم المستلم: " + recipient + "\nمحتويات الشحنة\n"
   const footer = "\nآخر تحديث للحالة " + clip(oneLine(update), 550)
   const items = db.select({ name: sql<string>`coalesce(${materials.name}, ${shipmentItems.description})`,
     quantity: shipmentItems.quantity, unitName: units.name }).from(shipmentItems)

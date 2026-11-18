@@ -150,7 +150,7 @@ test.each([
   expect(repo.detail(actor, id)?.events.find(({ description }) => description === translated)).toBeDefined()
   expect(stored.db.select().from(trackingEvents).all().find(({ source }) => source === "carrier")?.description).toBe(description.trim())
   const notice = stored.db.select().from(notificationOutbox).get()
-  expect(notice?.message).toBe("رقم الشحنة " + awb + "\nمحتويات الشحنة\n• Documents × 1\nآخر تحديث للحالة " + translated)
+  expect(notice?.message).toBe("رقم الشحنة " + awb + "\nاسم المستلم: Destination\nمحتويات الشحنة\n• Documents × 1\nآخر تحديث للحالة " + translated)
   time += interval
   await worker.run()
   expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(1)

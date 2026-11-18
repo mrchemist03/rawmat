@@ -94,6 +94,7 @@ test("commits a purchase notice once and retries the signed request after n8n re
     const shipmentRow = { id: shipment.id, trackingNumber: "FIXTURE009", status: "registered" as const }
     publishShipment(db, shipmentRow, "in_transit", 2, now)
     const shipmentNotice = db.select().from(notificationOutbox).all().find(({ event }) => event === "shipment.updated")
+    expect(shipmentNotice?.message).toContain("رقم الشحنة FIXTURE009\nاسم المستلم: Destination\nمحتويات الشحنة")
     expect(shipmentNotice?.message).toContain("• Material × 2 Unit")
     expect(shipmentNotice?.message).not.toMatch(/price|cost|private purchase note/i)
     db.delete(notificationOutbox).where(eq(notificationOutbox.id, shipmentNotice!.id)).run()
@@ -121,7 +122,8 @@ test("keeps long shipment contents within the existing webhook limit and preserv
     const destination = randomUUID()
     const owner = randomUUID()
     const recipient = randomUUID()
-    db.insert(branches).values([{ id: source, name: "Source", city: "Fixture" }, { id: destination, name: "Destination", city: "Fixture" }]).run()
+    db.insert(branches).values([{ id: source, name: "Source", city: "Fixture" },
+      { id: destination, name: "شعبة".repeat(30), city: "Fixture" }]).run()
     db.insert(users).values({ id: owner, name: "Fixture", loginName: "fixture", passwordHash: "fixture", role: "admin" }).run()
     db.insert(notificationRecipients).values({ id: recipient, name: "Fixture", phone: fixturePhone, active: true }).run()
     db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
@@ -135,6 +137,7 @@ test("keeps long shipment contents within the existing webhook limit and preserv
     expect(repo.update(actor, created.id, { revision: 1, status: "in_transit", location: "", description: "تحديث ".repeat(80).trim() })).toBe("saved")
     const notice = db.select().from(notificationOutbox).get()!
     expect(notice.message.length).toBeLessThanOrEqual(1024)
+    expect(notice.message).toContain("اسم المستلم: " + "شعبة".repeat(30))
     expect(notice.message).toContain("بنود أخرى")
     expect(notice.message).toContain("آخر تحديث للحالة " + "تحديث ".repeat(80).trim())
     expect(notice.message).not.toContain("بند\n")
