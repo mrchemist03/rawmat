@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto"
+import { shipmentStatusLabels, translateTrackingDescription } from "@rawmat/shared"
 import type { NotificationEvent, NotificationType, PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
-import { and, asc, eq, inArray, isNull, like, lt, lte, notInArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, like, lt, lte, ne, notInArray, sql } from "drizzle-orm"
 import type { AppDatabase } from "../../db/database.js"
-import { notificationOutbox, notificationRecipients, notificationRules, purchaseRequests, shipments } from "../../db/schema.js"
+import { materials, notificationOutbox, notificationRecipients, notificationRules, purchaseRequests,
+  shipmentItems, shipments, trackingEvents, units } from "../../db/schema.js"
+import { supersededTrackingSource } from "../shipments/tracking.js"
 
 export const day = 86_400_000
 type Connection = Pick<AppDatabase, "select" | "insert">
@@ -47,16 +50,47 @@ export function publishPurchase(db: Connection, row: { number: string; id: strin
     message: purchaseMessages[key] + " " + row.number, data: { number: row.number, status } })
 }
 
-const shipmentLabels: Record<ShipmentStatus, string> = {
-  registered: "مسجّلة", picked_up: "استلمها الناقل", in_transit: "في الطريق", out_for_delivery: "خرجت للتوصيل",
-  delivered: "سُلّمت", exception: "مشكلة", returned: "مرتجعة",
+function oneLine(value: string) {
+  return value.replace(/\s+/gu, " ").trim()
+}
+
+function clip(value: string, limit: number) {
+  if (value.length <= limit) return value
+  return value.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/u, "") + "…"
+}
+
+function shipmentMessage(db: Connection, id: string, awb: string, fallback: string, attention = false) {
+  const latest = db.select({ description: trackingEvents.description }).from(trackingEvents)
+    .where(and(eq(trackingEvents.shipmentId, id), ne(trackingEvents.source, supersededTrackingSource)))
+    .orderBy(sql`${trackingEvents.code} = 'manual:registered'`, desc(trackingEvents.occurredAt), desc(trackingEvents.revision)).get()
+  const description = latest ? translateTrackingDescription(latest.description) : fallback
+  const update = attention ? fallback + " · " + description : description
+  const header = "رقم الشحنة " + awb + "\nمحتويات الشحنة\n"
+  const footer = "\nآخر تحديث للحالة " + clip(oneLine(update), 550)
+  const items = db.select({ name: sql<string>`coalesce(${materials.name}, ${shipmentItems.description})`,
+    quantity: shipmentItems.quantity, unitName: units.name }).from(shipmentItems)
+    .leftJoin(materials, eq(materials.id, shipmentItems.materialId)).leftJoin(units, eq(units.id, materials.unitId))
+    .where(eq(shipmentItems.shipmentId, id)).orderBy(asc(shipmentItems.position)).limit(100).all()
+  const budget = 1024 - header.length - footer.length
+  const lines: string[] = []
+  for (const [index, item] of items.entries()) {
+    const rest = index + 1 < items.length ? "\n… و" + (items.length - index - 1) + " بنود أخرى" : ""
+    const available = budget - lines.join("\n").length - (lines.length ? 1 : 0) - rest.length
+    const line = "• " + oneLine(item.name) + " × " + item.quantity + (item.unitName ? " " + oneLine(item.unitName) : "")
+    if (available < 30) {
+      lines.push("… و" + (items.length - index) + " بنود أخرى")
+      break
+    }
+    lines.push(clip(line, available))
+  }
+  return header + (lines.length ? lines.join("\n") : "لم تُسجّل محتويات") + footer
 }
 
 export function publishShipment(db: Connection, row: { id: string; trackingNumber: string; status: ShipmentStatus },
   status: ShipmentStatus, revision: number, time: number) {
   if (status === row.status) return
   const awb = row.trackingNumber
-  const message = "الشحنة " + awb + " · " + shipmentLabels[status]
+  const message = shipmentMessage(db, row.id, awb, shipmentStatusLabels[status])
   const events: NotificationType[] = ["shipment.updated"]
   if (status === "delivered") events.push("shipment.delivered")
   if (status === "exception") events.push("shipment.attention")
@@ -110,7 +144,8 @@ export function queueScheduledNotices(db: AppDatabase, time: number) {
         .orderBy(asc(activity), asc(shipments.id)).limit(reviewLimit).all()
       for (const row of rows) {
         queueNotice(tx, { event: "shipment.attention", dedupeKey: row.key, occurredAt: time,
-          message: "لم يرد تحديث للشحنة " + row.awb + " منذ ثلاثة أيام", data: { awb: row.awb, reason: "stale" } }, attention)
+          message: shipmentMessage(tx, row.id, row.awb, "لم يرد تحديث منذ ثلاثة أيام", true),
+          data: { awb: row.awb, reason: "stale" } }, attention)
         tx.update(shipments).set({ staleNotifiedActivityAt: row.activity }).where(eq(shipments.id, row.id)).run()
       }
       more ||= rows.length === reviewLimit

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { pageSize } from "@rawmat/shared"
+import { pageSize, translateTrackingDescription } from "@rawmat/shared"
 import type { ShipmentEdit, ShipmentInput, ShipmentQuery, ShipmentReceipt, ShipmentUpdate } from "@rawmat/shared"
 import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
@@ -45,6 +45,10 @@ function itemData({ materialId, description, quantity }: Pick<ItemRow, "material
   return { materialId, description, quantity }
 }
 
+function translatedEvent<T extends { description: string }>(event: T): T {
+  return { ...event, description: translateTrackingDescription(event.description) }
+}
+
 export function createShipmentRepository(db: AppDatabase, now: () => number, automatic = false) {
   const provider = new ManualProvider()
   function audit(tx: Connection, actor: Actor, shipmentId: string, action: string, after: Record<string, string | number>) {
@@ -81,7 +85,7 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         .limit(limit).offset((page - 1) * pageSize).all()
       const total = db.select({ total: count() }).from(shipments).innerJoin(source, eq(source.id, shipments.sourceId))
         .innerJoin(destination, eq(destination.id, shipments.destinationId)).where(filter).get()?.total ?? 0
-      return { items, total }
+      return { items: items.map((item) => ({ ...item, lastEvent: translatedEvent(item.lastEvent) })), total }
     },
 
     detail(actor: Actor, id: string) {
@@ -96,7 +100,8 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
       const events = db.select(eventFields).from(trackingEvents).where(activeEvents(id))
         .orderBy(desc(trackingEvents.occurredAt), desc(trackingEvents.revision)).limit(100).all()
       const finished = trackingFinished(row.status, row.receivedAt)
-      return { ...header, revision: row.revision, items: items.map(({ materialId: _materialId, ...view }) => view), events,
+      return { ...header, lastEvent: translatedEvent(header.lastEvent), revision: row.revision,
+        items: items.map(({ materialId: _materialId, ...view }) => view), events: events.map(translatedEvent),
         edit: actor.manage && row.receivedAt === null ? {
           sourceId: row.sourceId, destinationId: row.destinationId, materialIds: items.map(({ materialId }) => materialId),
         } : null,

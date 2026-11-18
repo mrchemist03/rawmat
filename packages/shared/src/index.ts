@@ -7,6 +7,7 @@ export * from "./catalogue.js"
 export * from "./audit.js"
 export * from "./purchases.js"
 export * from "./shipments.js"
+export * from "./tracking-text.js"
 export * from "./notifications.js"
 export * from "./overview.js"
 

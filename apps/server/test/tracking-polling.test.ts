@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import { eq } from "drizzle-orm"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { openDatabase } from "../src/db/database.js"
-import { auditLog, branches, shipments, stockMovements, trackingEvents, users } from "../src/db/schema.js"
+import { auditLog, branches, notificationOutbox, notificationRecipients, notificationRules, shipments,
+  stockMovements, trackingEvents, users } from "../src/db/schema.js"
 import { createTrackingPoller, trackingIdleLimit, trackingState } from "../src/modules/shipments/polling.js"
 import { createShipmentRepository } from "../src/modules/shipments/repository.js"
 import type { TrackingProvider, TrackingResult } from "../src/modules/shipments/tracking.js"
@@ -127,4 +128,30 @@ test("a tracking response for the previous number cannot change a corrected ship
   expect(track).toHaveBeenLastCalledWith([corrected], expect.any(AbortSignal))
   expect(shipment()).toMatchObject({ status: "in_transit", revision: 3 })
   expect(repo.detail(actor, id)?.lastEvent.status).toBe("in_transit")
+})
+
+test.each([
+  ["Shipment charges paid", "تم سداد رسوم الشحنة"],
+  ["Delivery Scheduled", "تمت جدولة التوصيل"],
+  ["SMS Sent to Consignee", "أُرسلت رسالة نصية إلى المستلم"],
+  ["Received at Origin Facility", "تم استلام الشحنة في مركز الإرسال"],
+  ["  DELIVERY   SCHEDULED. ", "تمت جدولة التوصيل"],
+  ["Unknown carrier description", "Unknown carrier description"],
+  ["حالة مخصّصة", "حالة مخصّصة"],
+])("translates %s consistently for existing views, exports, and notification text", async (description, translated) => {
+  const recipient = randomUUID()
+  stored.db.insert(notificationRecipients).values({ id: recipient, name: "Fixture", phone: "+12025550111", active: true }).run()
+  stored.db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
+  const worker = createTrackingPoller(stored.db, { track: async () => [{
+    awb, events: [{ status: "in_transit", code: "FIXTURE", description, location: "", occurredAt: milestone - 10 }],
+  }] }, () => time)
+  await worker.run()
+  expect(repo.list({}).items[0]?.lastEvent.description).toBe(translated)
+  expect(repo.detail(actor, id)?.events.find(({ description }) => description === translated)).toBeDefined()
+  expect(stored.db.select().from(trackingEvents).all().find(({ source }) => source === "carrier")?.description).toBe(description.trim())
+  const notice = stored.db.select().from(notificationOutbox).get()
+  expect(notice?.message).toBe("رقم الشحنة " + awb + "\nمحتويات الشحنة\n• Documents × 1\nآخر تحديث للحالة " + translated)
+  time += interval
+  await worker.run()
+  expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(1)
 })

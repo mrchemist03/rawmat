@@ -5,7 +5,7 @@ import { openDatabase } from "../src/db/database.js"
 import { branches, categories, materials, notificationOutbox, notificationRecipients, notificationRules, stockMovements,
   units, users } from "../src/db/schema.js"
 import { createNotificationWorker, notificationRetention, pruneNotificationHistory, readNotificationDelivery } from "../src/modules/notifications/delivery.js"
-import { day, queueScheduledNotices } from "../src/modules/notifications/events.js"
+import { day, publishShipment, queueScheduledNotices } from "../src/modules/notifications/events.js"
 import { createPurchaseRepository } from "../src/modules/purchases/repository.js"
 import { createShipmentRepository } from "../src/modules/shipments/repository.js"
 
@@ -88,7 +88,15 @@ test("commits a purchase notice once and retries the signed request after n8n re
       items: [{ kind: "material", materialId: material, quantity: 2 }],
     })
     expect(shipment).toHaveProperty("id")
+    if (typeof shipment === "string") throw new Error(shipment)
     expect(db.select().from(notificationOutbox).all().map(({ event }) => event)).toEqual([typeFixture, "inventory.low"])
+    db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
+    const shipmentRow = { id: shipment.id, trackingNumber: "FIXTURE009", status: "registered" as const }
+    publishShipment(db, shipmentRow, "in_transit", 2, now)
+    const shipmentNotice = db.select().from(notificationOutbox).all().find(({ event }) => event === "shipment.updated")
+    expect(shipmentNotice?.message).toContain("• Material × 2 Unit")
+    expect(shipmentNotice?.message).not.toMatch(/price|cost|private purchase note/i)
+    db.delete(notificationOutbox).where(eq(notificationOutbox.id, shipmentNotice!.id)).run()
     now += 3 * day
     queueScheduledNotices(db, now)
     queueScheduledNotices(db, now)
@@ -99,6 +107,37 @@ test("commits a purchase notice once and retries the signed request after n8n re
     pruneNotificationHistory(db, now)
     queueScheduledNotices(db, now)
     expect(db.select().from(notificationOutbox).all()).toHaveLength(0)
+  } finally {
+    database.close()
+  }
+})
+
+test("keeps long shipment contents within the existing webhook limit and preserves the latest update", () => {
+  const database = openDatabase(":memory:")
+  try {
+    const { db } = database
+    const now = 1_800_000_000_000
+    const source = randomUUID()
+    const destination = randomUUID()
+    const owner = randomUUID()
+    const recipient = randomUUID()
+    db.insert(branches).values([{ id: source, name: "Source", city: "Fixture" }, { id: destination, name: "Destination", city: "Fixture" }]).run()
+    db.insert(users).values({ id: owner, name: "Fixture", loginName: "fixture", passwordHash: "fixture", role: "admin" }).run()
+    db.insert(notificationRecipients).values({ id: recipient, name: "Fixture", phone: fixturePhone, active: true }).run()
+    db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
+    const repo = createShipmentRepository(db, () => now)
+    const actor = { id: owner, branchId: source, manage: true }
+    const created = repo.create(actor, { sourceId: source, destinationId: destination, trackingNumber: "FIXTURE100",
+      dispatchedOn: "2026-11-17", items: Array.from({ length: 100 }, () => ({
+        kind: "description" as const, description: "بند\n" + "صنف ".repeat(45), quantity: 2,
+      })) })
+    if (typeof created === "string") throw new Error(created)
+    expect(repo.update(actor, created.id, { revision: 1, status: "in_transit", location: "", description: "تحديث ".repeat(80).trim() })).toBe("saved")
+    const notice = db.select().from(notificationOutbox).get()!
+    expect(notice.message.length).toBeLessThanOrEqual(1024)
+    expect(notice.message).toContain("بنود أخرى")
+    expect(notice.message).toContain("آخر تحديث للحالة " + "تحديث ".repeat(80).trim())
+    expect(notice.message).not.toContain("بند\n")
   } finally {
     database.close()
   }
