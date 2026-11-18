@@ -66,6 +66,8 @@ jobs:
           test -n "$asset"
           curl --fail --silent --show-error "http://127.0.0.1:8080$asset" -o /dev/null
           curl --fail --silent --show-error http://127.0.0.1:8080/branding/logo.png -o "$RUNNER_TEMP/rawmat-logo.png"
+          grep -F 'href="/branding/theme.css"' "$RUNNER_TEMP/rawmat-index.html"
+          curl --fail --silent --show-error http://127.0.0.1:8080/branding/theme.css -o /dev/null
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/manage/accounts)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/materials)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/purchases)" = 404

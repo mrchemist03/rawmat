@@ -4,7 +4,7 @@ import { healthResponseSchema, meSchema } from "@rawmat/shared"
 import Fastify, { LogController } from "fastify"
 import { z } from "zod"
 import { healthHost } from "./config.js"
-import { readBrandLogo } from "./branding.js"
+import { readBrandLogo, readBrandTheme } from "./branding.js"
 import { can, navigationFor } from "./modules/auth/permissions.js"
 import { registerAuth } from "./modules/auth/routes.js"
 import type { AuthOptions } from "./modules/auth/routes.js"
@@ -112,6 +112,10 @@ export function buildApp(
     const logo = await readBrandLogo(auth?.brandingRoot ?? "branding")
     if (logo) return reply.type("image/png").send(logo)
     return reply.sendFile("rawmat-logo.png", webRoot, { cacheControl: false }).type("image/png")
+  })
+
+  app.get("/branding/theme.css", async (_request, reply) => {
+    return reply.type("text/css; charset=utf-8").send(await readBrandTheme(auth?.brandingRoot ?? "branding"))
   })
 
   if (auth) {
