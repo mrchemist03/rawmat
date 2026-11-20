@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import {
-  purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
+  aramexTrackingUrl, purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
   shipmentListSchema, shipmentReceiptSchema, shipmentStatus, shipmentStatusLabels as labels, shipmentUpdateSchema,
   trackingNumberSchema,
 } from "@rawmat/shared"
@@ -170,8 +170,7 @@ function ShipmentDetails({ item, onClose, onEdit, changed }: {
   const [action, setAction] = useState<"tracking" | "receipt">()
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState("")
-  const carrier = new URL("https://www.aramex.com/ae/en/track/results")
-  carrier.searchParams.set("ShipmentNumber", item.trackingNumber)
+  const carrier = aramexTrackingUrl(item.trackingNumber)
   async function refreshTracking() {
     setRefreshing(true)
     setRefreshError("")
@@ -195,7 +194,7 @@ function ShipmentDetails({ item, onClose, onEdit, changed }: {
     {item.tracking?.lastPolledAt != null && <p>آخر تحديث ناجح · <bdi>{dateTime.format(item.tracking.lastPolledAt)}</bdi></p>}
     {item.tracking && trackingNotes[item.tracking.state] && <p role="status">{trackingNotes[item.tracking.state]}</p>}
     {refreshError && <p role="alert" className="error">{refreshError}</p>}
-    <p><a href={carrier.href} target="_blank" rel="noopener noreferrer">عرض التتبع في أراميكس</a></p>
+    <p><a href={carrier} target="_blank" rel="noopener noreferrer">عرض التتبع في أراميكس</a></p>
     <h3>المحتويات</h3>
     <ul>{item.items.map((line) => <li key={line.id}>
       {line.name} · <bdi>{line.quantity}</bdi> {line.unitName}

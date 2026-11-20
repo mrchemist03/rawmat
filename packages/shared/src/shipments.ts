@@ -7,6 +7,13 @@ export const shipmentStatusLabels: Record<z.infer<typeof shipmentStatus>, string
   delivered: "تم التسليم", exception: "مشكلة", returned: "مرتجعة",
 }
 export const trackingNumberSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{5,32}$/)
+
+export function aramexTrackingUrl(trackingNumber: string) {
+  const url = new URL("https://www.aramex.com/ae/en/track/results")
+  url.searchParams.set("ShipmentNumber", trackingNumber)
+  return url.href
+}
+
 const quantity = z.number().positive().max(1_000_000_000)
 const revision = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 const item = z.discriminatedUnion("kind", [

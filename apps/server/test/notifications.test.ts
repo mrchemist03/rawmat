@@ -94,8 +94,8 @@ test("commits a purchase notice once and retries the signed request after n8n re
     const shipmentRow = { id: shipment.id, trackingNumber: "FIXTURE009", status: "registered" as const }
     publishShipment(db, shipmentRow, "in_transit", 2, now)
     const shipmentNotice = db.select().from(notificationOutbox).all().find(({ event }) => event === "shipment.updated")
-    expect(shipmentNotice?.message).toContain("رقم الشحنة FIXTURE009\nاسم المستلم: Destination\nمحتويات الشحنة")
-    expect(shipmentNotice?.message).toContain("• Material × 2 Unit")
+    expect(shipmentNotice?.message).toContain("رقم الشحنة : FIXTURE009\nاسم المستلم: Destination\n\nمحتويات الشحنة :\nMaterial × 2 Unit")
+    expect(shipmentNotice?.message).toMatch(/\n\nرابط التتبع المباشر\nhttps:\/\/www\.aramex\.com\/ae\/en\/track\/results\?ShipmentNumber=FIXTURE009$/)
     expect(shipmentNotice?.message).not.toMatch(/price|cost|private purchase note/i)
     db.delete(notificationOutbox).where(eq(notificationOutbox.id, shipmentNotice!.id)).run()
     now += 3 * day
@@ -103,6 +103,10 @@ test("commits a purchase notice once and retries the signed request after n8n re
     queueScheduledNotices(db, now)
     expect(db.select().from(notificationOutbox).all().map(({ event }) => event))
       .toEqual([typeFixture, "inventory.low", "purchase.overdue", "shipment.attention"])
+    const attention = db.select().from(notificationOutbox).all().find(({ event }) => event === "shipment.attention")!
+    expect(attention.message).toContain("\n\nآخر تحديث : لم يرد تحديث منذ ثلاثة أيام")
+    expect(attention.message).toMatch(/ShipmentNumber=FIXTURE009$/)
+    expect(attention.message.length).toBeLessThanOrEqual(1024)
     db.update(notificationOutbox).set({ state: "sent", sentAt: now }).run()
     now += notificationRetention + day
     pruneNotificationHistory(db, now)
@@ -129,17 +133,20 @@ test("keeps long shipment contents within the existing webhook limit and preserv
     db.insert(notificationRules).values({ event: "shipment.updated", enabled: true, recipientIds: [recipient] }).run()
     const repo = createShipmentRepository(db, () => now)
     const actor = { id: owner, branchId: source, manage: true }
-    const created = repo.create(actor, { sourceId: source, destinationId: destination, trackingNumber: "FIXTURE100",
+    const trackingNumber = "A".repeat(32)
+    const update = "تحديث ".repeat(100).slice(0, 500)
+    const created = repo.create(actor, { sourceId: source, destinationId: destination, trackingNumber,
       dispatchedOn: "2026-11-17", items: Array.from({ length: 100 }, () => ({
         kind: "description" as const, description: "بند\n" + "صنف ".repeat(45), quantity: 2,
       })) })
     if (typeof created === "string") throw new Error(created)
-    expect(repo.update(actor, created.id, { revision: 1, status: "in_transit", location: "", description: "تحديث ".repeat(80).trim() })).toBe("saved")
+    expect(repo.update(actor, created.id, { revision: 1, status: "in_transit", location: "", description: update })).toBe("saved")
     const notice = db.select().from(notificationOutbox).get()!
     expect(notice.message.length).toBeLessThanOrEqual(1024)
     expect(notice.message).toContain("اسم المستلم: " + "شعبة".repeat(30))
     expect(notice.message).toContain("بنود أخرى")
-    expect(notice.message).toContain("آخر تحديث للحالة " + "تحديث ".repeat(80).trim())
+    expect(notice.message).toContain("\n\nآخر تحديث : " + update.trim())
+    expect(notice.message).toMatch(new RegExp("\\n\\nرابط التتبع المباشر\\nhttps://www\\.aramex\\.com/ae/en/track/results\\?ShipmentNumber=" + trackingNumber + "$"))
     expect(notice.message).not.toContain("بند\n")
   } finally {
     database.close()

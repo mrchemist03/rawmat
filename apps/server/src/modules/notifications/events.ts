@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { shipmentStatusLabels, translateTrackingDescription } from "@rawmat/shared"
+import { aramexTrackingUrl, shipmentStatusLabels, translateTrackingDescription } from "@rawmat/shared"
 import type { NotificationEvent, NotificationType, PurchaseStatus, ShipmentStatus } from "@rawmat/shared"
 import { and, asc, desc, eq, inArray, isNull, like, lt, lte, ne, notInArray, sql } from "drizzle-orm"
 import type { AppDatabase } from "../../db/database.js"
@@ -68,8 +68,8 @@ function shipmentMessage(db: Connection, id: string, awb: string, fallback: stri
   const destination = db.select({ name: branches.name }).from(shipments)
     .innerJoin(branches, eq(branches.id, shipments.destinationId)).where(eq(shipments.id, id)).get()
   const recipient = clip(oneLine(destination?.name ?? "شعبة غير محددة"), 120)
-  const header = "رقم الشحنة " + awb + "\nاسم المستلم: " + recipient + "\nمحتويات الشحنة\n"
-  const footer = "\nآخر تحديث للحالة " + clip(oneLine(update), 550)
+  const header = "رقم الشحنة : " + awb + "\nاسم المستلم: " + recipient + "\n\nمحتويات الشحنة :\n"
+  const footer = "\n\nآخر تحديث : " + clip(oneLine(update), 550) + "\n\nرابط التتبع المباشر\n" + aramexTrackingUrl(awb)
   const items = db.select({ name: sql<string>`coalesce(${materials.name}, ${shipmentItems.description})`,
     quantity: shipmentItems.quantity, unitName: units.name }).from(shipmentItems)
     .leftJoin(materials, eq(materials.id, shipmentItems.materialId)).leftJoin(units, eq(units.id, materials.unitId))
@@ -79,7 +79,7 @@ function shipmentMessage(db: Connection, id: string, awb: string, fallback: stri
   for (const [index, item] of items.entries()) {
     const rest = index + 1 < items.length ? "\n… و" + (items.length - index - 1) + " بنود أخرى" : ""
     const available = budget - lines.join("\n").length - (lines.length ? 1 : 0) - rest.length
-    const line = "• " + oneLine(item.name) + " × " + item.quantity + (item.unitName ? " " + oneLine(item.unitName) : "")
+    const line = oneLine(item.name) + " × " + item.quantity + (item.unitName ? " " + oneLine(item.unitName) : "")
     if (available < 30) {
       lines.push("… و" + (items.length - index) + " بنود أخرى")
       break

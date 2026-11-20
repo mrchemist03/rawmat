@@ -155,7 +155,8 @@ test.each([
   expect(repo.detail(actor, id)?.events.find(({ description }) => description === translated)).toBeDefined()
   expect(stored.db.select().from(trackingEvents).all().find(({ source }) => source === "carrier")?.description).toBe(description.trim())
   const notice = stored.db.select().from(notificationOutbox).get()
-  expect(notice?.message).toBe("رقم الشحنة " + awb + "\nاسم المستلم: Destination\nمحتويات الشحنة\n• Documents × 1\nآخر تحديث للحالة " + translated)
+  expect(notice?.message).toBe("رقم الشحنة : " + awb + "\nاسم المستلم: Destination\n\nمحتويات الشحنة :\nDocuments × 1" +
+    "\n\nآخر تحديث : " + translated + "\n\nرابط التتبع المباشر\nhttps://www.aramex.com/ae/en/track/results?ShipmentNumber=" + awb)
   time += interval
   await worker.run()
   expect(stored.db.select().from(notificationOutbox).all()).toHaveLength(1)

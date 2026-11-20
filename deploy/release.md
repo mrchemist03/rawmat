@@ -7,7 +7,7 @@
 انسخ بصمة الصورة ووسم الإصدار من صفحة الإصدار نفسها. استعمل GitHub CLI للتحقق من هوية المستودع وسير العمل ووسم المصدر، ومن وجود قائمتي التوقيع على بصمة الصورة.
 
 ```bash
-tag='v0.1.8'
+tag='v0.1.9'
 image='ghcr.io/mrchemist03/rawmat@sha256:REPLACE_WITH_RELEASE_DIGEST'
 policy=(--repo mrchemist03/rawmat
   --signer-workflow mrchemist03/rawmat/.github/workflows/ci.yml
@@ -34,7 +34,7 @@ docker load --input rawmat-image.tar &&
 docker tag rawmat:dev "rawmat:$tag"
 ```
 
-بعد نجاح التحقق والتحميل، اضبط `APP_IMAGE=rawmat:v0.1.8` أو استخدم الوسم الذي نزّلته. شغّل أمر `docker compose ... up -d --wait` الوارد أعلاه.
+بعد نجاح التحقق والتحميل، اضبط `APP_IMAGE=rawmat:v0.1.9` أو استخدم الوسم الذي نزّلته. شغّل أمر `docker compose ... up -d --wait` الوارد أعلاه.
 
 ## نشر إصدار جديد
 
