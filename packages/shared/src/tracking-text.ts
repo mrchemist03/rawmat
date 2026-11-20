@@ -9,6 +9,8 @@ const translations = new Map<string, string>([
   ["shipment received at destination facility", "تم استلام الشحنة في مركز الوجهة"],
   ["departed operations facility - in transit", "غادرت الشحنة مركز العمليات وهي في الطريق"],
   ["picked up from shipper", "استلم الناقل الشحنة من المرسل"],
+  ["pickup scheduled", "تمت جدولة استلام الشحنة من المرسل"],
+  ["pickup completed", "تم استلام الشحنة من المرسل"],
   ["record created", "تم تسجيل الشحنة"],
   ["shipment information received", "تم استلام بيانات الشحنة"],
   ["shipment created", "تم تسجيل الشحنة"],
@@ -26,6 +28,7 @@ const translations = new Map<string, string>([
   ["delivered to consignee", "تم تسليم الشحنة إلى المستلم"],
   ["delivery attempted", "تمت محاولة توصيل الشحنة"],
   ["delivery failed", "تعذّر توصيل الشحنة"],
+  ["on hold - awaiting correct delivery address", "الشحنة معلّقة بانتظار عنوان توصيل صحيح"],
   ["returned to sender", "أُعيدت الشحنة إلى المرسل"],
   ["shipment returned to sender", "أُعيدت الشحنة إلى المرسل"],
 ])
