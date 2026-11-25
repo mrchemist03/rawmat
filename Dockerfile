@@ -1,4 +1,4 @@
-FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS build
+FROM node:24-trixie-slim@sha256:4d00acb4bcc42c454c4eb801526f7ad7f772ea3bd4fd168c5cc2e384abcbb9d4 AS build
 WORKDIR /app
 
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -15,7 +15,20 @@ FROM build AS production-dependencies
 RUN npm ci --omit=dev --workspace @rawmat/server --workspace @rawmat/shared --ignore-scripts --no-audit --no-fund \
     && mkdir /data
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:6abfcb367ebc291572c774c1592a986be2ab26a2486f73093401327495a5962a
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:39b0407357c9fadf1a9708d22088f02de21f0e1e8a688474eea2d8701e7d5693 AS node-runtime
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot@sha256:4006ac92504be607b70de01d1f64f38288c69fcd8faa820f6d3aed266ea32ac5
+# Official Node bundles TLS and compression; copy only its loaded C++ runtime dependencies.
+COPY --from=node-runtime /nodejs /nodejs
+COPY --from=node-runtime /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /usr/lib/x86_64-linux-gnu/
+COPY --from=node-runtime /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 /usr/lib/x86_64-linux-gnu/
+# Keep the copied Debian packages discoverable in vulnerability scans and the SBOM.
+COPY --from=node-runtime /var/lib/dpkg/status.d/libstdc++6* /var/lib/dpkg/status.d/
+COPY --from=node-runtime /var/lib/dpkg/status.d/libgcc-s1* /var/lib/dpkg/status.d/
+COPY --from=node-runtime /var/lib/dpkg/status.d/gcc-14-base* /var/lib/dpkg/status.d/
+COPY --from=node-runtime /usr/share/doc/libstdc++6 /usr/share/doc/libstdc++6
+COPY --from=node-runtime /usr/share/doc/libgcc-s1 /usr/share/doc/libgcc-s1
+COPY --from=node-runtime /usr/share/doc/gcc-14-base /usr/share/doc/gcc-14-base
 WORKDIR /app
 ENV NODE_ENV=production DATABASE_PATH=/data/rawmat.sqlite BRANDING_PATH=/app/branding
 
@@ -33,4 +46,5 @@ USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["/nodejs/bin/node", "apps/server/dist/healthcheck.js"]
+ENTRYPOINT ["/nodejs/bin/node"]
 CMD ["apps/server/dist/index.js"]

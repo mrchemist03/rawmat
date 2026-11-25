@@ -68,6 +68,20 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:8080/branding/logo.png -o "$RUNNER_TEMP/rawmat-logo.png"
           grep -F 'href="/branding/theme.css"' "$RUNNER_TEMP/rawmat-index.html"
           curl --fail --silent --show-error http://127.0.0.1:8080/branding/theme.css -o /dev/null
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            rawmat:dev -e '
+              const assert = require("node:assert/strict")
+              const fs = require("node:fs")
+              require("node:tls").createSecureContext()
+              assert.equal(process.config.variables.node_shared_openssl, false)
+              assert.equal(process.features.quic, false)
+              for (const file of ["libssl.so.3", "libcrypto.so.3", "libzstd.so.1"]) {
+                assert.equal(fs.existsSync("/usr/lib/x86_64-linux-gnu/" + file), false)
+              }
+              for (const pkg of ["libgcc-s1", "libstdc++6", "gcc-14-base"]) {
+                assert(fs.existsSync("/var/lib/dpkg/status.d/" + pkg))
+              }
+            '
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/manage/accounts)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/materials)" = 404
           test "$(curl --silent --show-error -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/purchases)" = 404
