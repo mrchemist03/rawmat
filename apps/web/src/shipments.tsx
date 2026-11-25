@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react"
-import type { FormEvent } from "react"
+import { Fragment, useEffect, useRef, useState } from "react"
+import type { FormEvent, ReactNode } from "react"
 import {
   aramexTrackingUrl, purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
   shipmentListSchema, shipmentReceiptSchema, shipmentStatus, shipmentStatusLabels as labels, shipmentUpdateSchema,
@@ -29,11 +29,11 @@ function emptyItem(key: number): Item {
 }
 
 function ShipmentEditor({ initial, onClose, onSaved }: {
-  initial?: ShipmentDetail; onClose: () => void; onSaved: (id: string, duplicate: boolean) => void
+  initial?: ShipmentDetail; onClose: () => void; onSaved: (id: string, duplicate: boolean, trackingNumber: string) => void
 }) {
   const editor = useEditor(path, initial?.id, async (response) => {
-    if (initial) return onSaved(initial.id, false)
-    onSaved(shipmentIdSchema.parse(await response.json()).id, response.status === 200)
+    if (initial) return onSaved(initial.id, false, trackingNumberSchema.parse(trackingNumber))
+    onSaved(shipmentIdSchema.parse(await response.json()).id, response.status === 200, trackingNumberSchema.parse(trackingNumber))
   })
   const editData = initial?.edit
   const [source, setSource] = useState<ReferenceOption | undefined>(initial && editData
@@ -59,7 +59,7 @@ function ShipmentEditor({ initial, onClose, onSaved }: {
       const response = await request(`${path}/tracking/${encodeURIComponent(parsed.data)}`)
       if (response.status === 404) return editor.setError("لا توجد شحنة بهذا الرقم. أكمل البيانات لتسجيلها.")
       if (!response.ok) throw new Error()
-      onSaved(shipmentIdSchema.parse(await response.json()).id, true)
+      onSaved(shipmentIdSchema.parse(await response.json()).id, true, parsed.data)
     } catch {
       editor.setError(unavailable)
     } finally {
@@ -219,6 +219,21 @@ function ShipmentDetails({ item, onClose, onEdit, changed }: {
   </section>
 }
 
+function ExpandedShipment({ id, onClose, children }: { id: string; onClose: () => void; children: ReactNode }) {
+  const panel = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    panel.current?.focus({ preventScroll: true })
+    panel.current?.scrollIntoView({ block: "nearest" })
+  }, [id])
+  return <div ref={panel} id={`shipment-details-${id}`} className="shipment-expanded" tabIndex={-1}
+    role="region" aria-labelledby={`shipment-toggle-${id}`}>
+    <div className="shipment-detail-toolbar"><strong>تفاصيل الشحنة</strong>
+      <button type="button" className="secondary" onClick={onClose}>طي التفاصيل</button>
+    </div>
+    {children}
+  </div>
+}
+
 export function Shipments() {
   const [status, setStatus] = useState("")
   const [sort, setSort] = useState("newest")
@@ -255,6 +270,7 @@ export function Shipments() {
   }, [selected, version, editing])
 
   function show(id?: string) {
+    if (!id && selected) document.getElementById(`shipment-toggle-${selected}`)?.focus()
     setCreating(false)
     setEditing(undefined)
     setSelected(id)
@@ -278,41 +294,51 @@ export function Shipments() {
       <CsvExport endpoint={path + "/export"} filename="shipments.csv" query={list.exportQuery} />
       <button onClick={() => { show(); setCreating(true) }}>إضافة شحنة</button>
     </div></div>
-    {notice && <p role="status" className="notice">{notice}</p>}
-    {error && <p role="alert" className="error">{error}</p>}
-    {creating && <ShipmentEditor onClose={() => setCreating(false)} onSaved={(id, duplicate) => {
+    {notice && !list.result?.items.some(({ id }) => id === selected) && <p role="status" className="notice">{notice}</p>}
+    {error && !list.result?.items.some(({ id }) => id === selected) && <p role="alert" className="error">{error}</p>}
+    {creating && <ShipmentEditor onClose={() => setCreating(false)} onSaved={(id, duplicate, trackingNumber) => {
       show(id)
       setNotice(duplicate ? "رقم التتبع مسجّل سابقًا. فُتحت الشحنة الموجودة." : "تم تسجيل الشحنة.")
-      list.setPage(1)
+      setStatus("")
+      list.search(trackingNumber)
       list.refresh()
     }} />}
-    {editing && <ShipmentEditor initial={editing} onClose={() => setEditing(undefined)}
-      onSaved={() => changed("تم حفظ تعديل الشحنة.")} />}
-    {detail && !editing && <ShipmentDetails key={`${detail.id}:${detail.revision}`} item={detail}
-      onClose={() => show()} onEdit={() => setEditing(detail)} changed={changed} />}
-    {selected && !detail && !error && <p role="status">جارٍ تحميل الشحنة…</p>}
     <div className="catalogue-filters">
       <label><span id="shipment-status-filter">الحالة</span><select aria-labelledby="shipment-status-filter" value={status}
-        onChange={(event) => { list.setPage(1); setStatus(event.target.value) }}>
+        onChange={(event) => { show(); list.setPage(1); setStatus(event.target.value) }}>
         <option value="">كل الحالات</option>
         {shipmentStatus.options.map((value) => <option key={value} value={value}>{labels[value]}</option>)}
       </select></label>
       <label><span id="shipment-sort-filter">الفرز</span><select aria-labelledby="shipment-sort-filter" value={sort}
-        onChange={(event) => { list.setPage(1); setSort(event.target.value) }}>
+        onChange={(event) => { show(); list.setPage(1); setSort(event.target.value) }}>
         <option value="newest">الأحدث تسجيلًا</option><option value="dispatch">الأحدث إرسالًا</option>
       </select></label>
     </div>
-    <Listing data={list}>
+    <Listing data={{ ...list, search(value) { show(); list.search(value) }, setPage(value) { show(); list.setPage(value) } }}>
       {list.result?.items.length ? <div className="table-scroll"><table>
         <thead><tr><th scope="col">رقم التتبع</th><th scope="col">المصدر</th><th scope="col">الوجهة</th>
           <th scope="col">تاريخ الإرسال</th><th scope="col">الحالة</th><th scope="col">آخر حدث</th></tr></thead>
-        <tbody>{list.result.items.map((item) => <tr key={item.id}>
-          <th scope="row"><button className="secondary compact" onClick={() => show(item.id)}><bdi>{item.trackingNumber}</bdi></button></th>
+        <tbody>{list.result.items.map((item) => <Fragment key={item.id}><tr className={selected === item.id ? "shipment-row-expanded" : undefined}>
+          <th scope="row"><button id={`shipment-toggle-${item.id}`} className="secondary compact" aria-expanded={selected === item.id}
+            aria-controls={selected === item.id ? `shipment-details-${item.id}` : undefined}
+            onClick={() => show(selected === item.id ? undefined : item.id)}>
+            <span aria-hidden="true">{selected === item.id ? "▾ " : "▸ "}</span><bdi>{item.trackingNumber}</bdi>
+          </button></th>
           <td>{item.sourceName}</td><td>{item.destinationName}</td><td><bdi>{item.dispatchedOn}</bdi></td>
-          <td><span className="shipment-status">{labels[item.status]}</span>{item.receivedAt !== null && <small className="table-note">الاستلام مؤكّد</small>}</td>
+          <td><span className={`shipment-status${item.status === "delivered" ? " shipment-status-delivered" : ""}`}>{labels[item.status]}</span>{item.receivedAt !== null && <small className="table-note">الاستلام مؤكّد</small>}</td>
           <td>{item.lastEvent.description}<small className="table-note">{item.lastEvent.location}{item.lastEvent.location && " · "}
             <bdi>{dateTime.format(item.lastEvent.occurredAt)}</bdi></small></td>
-        </tr>)}</tbody>
+        </tr>{selected === item.id && <tr className="shipment-detail-row"><td colSpan={6}>
+          <ExpandedShipment id={item.id} onClose={() => show()}>
+            {notice && <p role="status" className="notice">{notice}</p>}
+            {error && <p role="alert" className="error">{error}</p>}
+            {editing && <ShipmentEditor initial={editing} onClose={() => setEditing(undefined)}
+              onSaved={(_id, _duplicate, trackingNumber) => { setStatus(""); list.search(trackingNumber); changed("تم حفظ تعديل الشحنة.") }} />}
+            {detail && !editing && <ShipmentDetails key={`${detail.id}:${detail.revision}`} item={detail}
+              onClose={() => show()} onEdit={() => setEditing(detail)} changed={changed} />}
+            {!detail && !editing && !error && <p role="status">جارٍ تحميل الشحنة…</p>}
+          </ExpandedShipment>
+        </td></tr>}</Fragment>)}</tbody>
       </table></div> : <p className="empty">لا توجد شحنات مطابقة.</p>}
     </Listing>
   </section>

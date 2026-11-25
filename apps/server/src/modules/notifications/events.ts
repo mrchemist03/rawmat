@@ -94,11 +94,15 @@ export function publishShipment(db: Connection, row: { id: string; trackingNumbe
   if (status === row.status) return
   const awb = row.trackingNumber
   const message = shipmentMessage(db, row.id, awb, shipmentStatusLabels[status])
-  const events: NotificationType[] = ["shipment.updated"]
-  if (status === "delivered") events.push("shipment.delivered")
-  if (status === "exception") events.push("shipment.attention")
-  for (const event of events) publish(db, { event, dedupeKey: event + ":" + row.id + ":" + revision, occurredAt: time,
-    message, data: { awb, status } })
+  const specificEvent = status === "delivered" ? "shipment.delivered" : status === "exception" ? "shipment.attention" : undefined
+  const specificRecipients = specificEvent ? recipientsFor(db, specificEvent) : []
+  // Give the specialized notice priority per recipient, preserving general-only subscriptions.
+  const specificIds = new Set(specificRecipients.map(({ id }) => id))
+  const generalRecipients = recipientsFor(db, "shipment.updated").filter(({ id }) => !specificIds.has(id))
+  const groups: { event: NotificationType; recipients: Recipient[] }[] = [{ event: "shipment.updated", recipients: generalRecipients }]
+  if (specificEvent) groups.push({ event: specificEvent, recipients: specificRecipients })
+  for (const { event, recipients } of groups) queueNotice(db, { event, dedupeKey: event + ":" + row.id + ":" + revision, occurredAt: time,
+    message, data: { awb, status } }, recipients)
 }
 
 export function discardShipmentNotices(db: Pick<AppDatabase, "delete">, id: string, trackingNumber: string) {

@@ -154,6 +154,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .purchase-actions { flex-wrap: wrap; margin-block: 12px; }
 .purchase-operation { margin-block: 14px; max-inline-size: 540px; }
 .shipment-status { display: inline-block; padding: 3px 8px; border-radius: 12px; background: var(--soft-bg); white-space: nowrap; }
+.shipment-status-delivered { color: #166534; background: #dcfce7; }
+.shipment-row-expanded { background: var(--hover-bg); }
+.shipment-detail-row > td { padding: 12px; background: var(--card-bg); }
+.shipment-expanded { position: sticky; inset-inline-start: 0; max-inline-size: calc(100vw - 88px); overflow-wrap: anywhere; }
+.shipment-expanded:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.shipment-expanded .editor { margin-block: 10px 0; }
+.shipment-detail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.shipment-detail-toolbar .secondary { margin: 0; }
 
 @media (max-width: 760px) {
   .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

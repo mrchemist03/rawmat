@@ -39,7 +39,7 @@ export function useCollection<R extends Result>(path: string, schema: { parse(in
   const exportQuery = new URLSearchParams(filters)
   if (search) exportQuery.set("search", search)
   return {
-    result, error, page, setPage, search: updateSearch,
+    result, error, page, setPage, search: updateSearch, searchValue: search,
     exportQuery: exportQuery.toString(),
     refresh() { refresh((value) => value + 1) },
   }
@@ -54,7 +54,7 @@ export function Listing({ data, children }: { data: ReturnType<typeof useCollect
   return (
     <>
       <form className="search" onSubmit={submit}>
-        <label>بحث<input name="search" type="search" maxLength={120} /></label>
+        <label>بحث<input key={data.searchValue} name="search" type="search" maxLength={120} defaultValue={data.searchValue} /></label>
         <button className="secondary" type="submit">بحث</button>
       </form>
       {data.error && <p role="alert" className="error">{data.error}</p>}
