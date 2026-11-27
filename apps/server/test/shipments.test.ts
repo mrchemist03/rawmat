@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { parse } from "csv-parse/sync"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,6 +10,7 @@ import { openDatabase } from "../src/db/database.js"
 import { auditLog, branches, categories, materials, notificationOutbox, stockMovements, units, users } from "../src/db/schema.js"
 import { hashPassword } from "../src/modules/auth/passwords.js"
 import { ManualProvider } from "../src/modules/shipments/tracking.js"
+import { createShipmentRepository } from "../src/modules/shipments/repository.js"
 
 const origin = "https://rawmat.example.invalid"
 const config = readServerConfig({ APP_URL: origin })
@@ -214,4 +216,70 @@ test("only a superuser can correct an unreceived shipment, with atomic stock and
   expect(audits).toHaveLength(2)
   expect(audits[1]?.before?.trackingNumber).toBe(input.trackingNumber)
   expect(audits[1]?.after?.trackingNumber).toBe(number)
+})
+
+test("lists and exports ordered shipment contents, preserves decimals and CSV escaping, and reflects edits", async () => {
+  const material = randomUUID()
+  const name = 'حمض "الستريك"، تجريبي'
+  db.db.insert(materials).values({ id: material, code: "MAT-CONTENTS", name, nameNormalized: "ماده اختبار المحتويات",
+    categoryId: categoryId!, unitId: unitId!, minimumQuantity: 0 }).run()
+  db.db.insert(stockMovements).values({ id: randomUUID(), branchId: sourceId!, materialId: material, quantity: "10",
+    kind: "fixture", referenceId: randomUUID(), referenceItemId: randomUUID(), referenceRevision: 1, occurredAt: 1 }).run()
+  const input = { ...shipment, trackingNumber: "CONTENTS001", items: [
+    { kind: "description", description: "=SUM(1,2)", quantity: 1 },
+    { kind: "material", materialId: material, quantity: 2.5 },
+    { kind: "description", description: 'مستندات، "نسخة"\nسطر ثانٍ', quantity: 0.125 },
+  ] }
+  const created = await post("sender", path, input)
+  expect(created.statusCode).toBe(201)
+  const list = (await get("sender", path + "?search=CONTENTS001")).json()
+  expect(list.items).toHaveLength(1)
+  expect(list.items[0].contents).toEqual([
+    { name: "=SUM(1,2)", quantity: "1", unitName: null },
+    { name, quantity: "2.5", unitName: "كغ" },
+    { name: 'مستندات، "نسخة"\nسطر ثانٍ', quantity: "0.125", unitName: null },
+  ])
+  expect(Object.keys(list.items[0].contents[1]).sort()).toEqual(["name", "quantity", "unitName"])
+  expect((await get("signed-out", path + "/export?search=CONTENTS001")).statusCode).toBe(404)
+  const csv = await get("sender", path + "/export?search=CONTENTS001")
+  expect(csv.statusCode).toBe(200)
+  const records = parse(csv.body, { columns: true, bom: true })
+  expect(records).toHaveLength(1)
+  expect(records[0]["محتويات الشحنة"]).toBe("'=SUM(1,2) × 1\n" + name + ' × 2.5 كغ\nمستندات، "نسخة"\nسطر ثانٍ × 0.125')
+  const edited = await post("manager", path + "/" + created.json().id, { ...input, revision: 1, items: [
+    { kind: "material", materialId: material, quantity: 0.75 },
+    { kind: "description", description: "مستندات مصححة", quantity: 2 },
+  ] }, "PUT")
+  expect(edited.statusCode).toBe(204)
+  const updated = (await get("sender", path + "?search=CONTENTS001")).json().items[0]
+  expect(updated.contents).toEqual([{ name, quantity: "0.75", unitName: "كغ" }, { name: "مستندات مصححة", quantity: "2", unitName: null }])
+  const updatedCsv = await get("sender", path + "/export?search=CONTENTS001")
+  expect(parse(updatedCsv.body, { columns: true, bom: true })[0]["محتويات الشحنة"])
+    .toBe(name + " × 0.75 كغ\nمستندات مصححة × 2")
+})
+
+test("keeps paginated shipment contents isolated and exports all rows across content batches", async () => {
+  const sender = db.db.select().from(users).all().find(({ loginName }) => loginName === "sender")!
+  const repo = createShipmentRepository(db.db, () => 1_800_000_000_000)
+  const expected = new Map<string, string>()
+  for (let index = 0; index < 501; index++) {
+    const trackingNumber = "BULKCONT" + String(index).padStart(4, "0")
+    const description = "محتوى تجريبي " + index
+    const created = repo.create({ id: sender.id, branchId: sourceId!, manage: false }, { ...shipment, trackingNumber,
+      items: [{ kind: "description", description, quantity: index + 0.5 }] })
+    expect(created).toHaveProperty("id")
+    expected.set(trackingNumber, description + " × " + (index + 0.5))
+  }
+  const list = (await get("sender", path + "?search=BULKCONT&page=2")).json()
+  expect(list.total).toBe(501)
+  expect(list.items).toHaveLength(25)
+  for (const item of list.items) {
+    expect(item.contents).toHaveLength(1)
+    expect(item.contents[0].name + " × " + item.contents[0].quantity).toBe(expected.get(item.trackingNumber))
+  }
+  const csv = await get("sender", path + "/export?search=BULKCONT")
+  expect(csv.statusCode).toBe(200)
+  const records = parse(csv.body, { columns: true, bom: true })
+  expect(records).toHaveLength(501)
+  for (const row of records) expect(row["محتويات الشحنة"]).toBe(expected.get(row["رقم التتبع"]))
 })

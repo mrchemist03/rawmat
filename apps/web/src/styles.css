@@ -155,6 +155,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .purchase-operation { margin-block: 14px; max-inline-size: 540px; }
 .shipment-status { display: inline-block; padding: 3px 8px; border-radius: 12px; background: var(--soft-bg); white-space: nowrap; }
 .shipment-status-delivered { color: #166534; background: #dcfce7; }
+.shipment-contents { min-inline-size: 180px; max-inline-size: 300px; overflow-wrap: anywhere; }
+.shipment-contents ul { margin: 0; padding-inline-start: 18px; }
+.shipment-contents details { margin-block-start: 5px; }
+.shipment-contents summary { cursor: pointer; color: var(--primary-text); }
 .shipment-row-expanded { background: var(--hover-bg); }
 .shipment-detail-row > td { padding: 12px; background: var(--card-bg); }
 .shipment-expanded { position: sticky; inset-inline-start: 0; max-inline-size: calc(100vw - 88px); overflow-wrap: anywhere; }

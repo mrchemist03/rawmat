@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import {
-  aramexTrackingUrl, purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
+  aramexTrackingUrl, formatShipmentContent, purchaseBranchListSchema, shipmentDetailSchema, shipmentIdSchema, shipmentInputSchema,
   shipmentListSchema, shipmentReceiptSchema, shipmentStatus, shipmentStatusLabels as labels, shipmentUpdateSchema,
   trackingNumberSchema,
 } from "@rawmat/shared"
-import type { ReferenceOption, ShipmentDetail } from "@rawmat/shared"
+import type { ReferenceOption, ShipmentContent, ShipmentDetail } from "@rawmat/shared"
 import { rejection, request, unavailable } from "./api"
 import { Lookup, materialOptions } from "./lookup"
 import { EditorActions, Listing, useCollection, useEditor } from "./management"
@@ -111,7 +111,7 @@ function ShipmentEditor({ initial, onClose, onSaved }: {
               select={(material) => edit(item.key, { material })} />
             : <label>الوصف {index + 1}<input value={item.description} maxLength={250} required
               onChange={(event) => edit(item.key, { description: event.target.value })} /></label>}
-          <label>الكمية {index + 1}<input type="number" step="any" min="0" max="1000000000" dir="ltr" required
+          <label>الكمية {index + 1}<input type="text" inputMode="decimal" maxLength={338} pattern="[0-9]+([.][0-9]*)?|[.][0-9]+" dir="ltr" required
             value={item.quantity} onChange={(event) => edit(item.key, { quantity: event.target.value })} /></label>
           {items.length > 1 && <button type="button" className="secondary"
             onClick={() => setItems((current) => current.filter(({ key }) => key !== item.key))}>إزالة البند</button>}
@@ -219,6 +219,16 @@ function ShipmentDetails({ item, onClose, onEdit, changed }: {
   </section>
 }
 
+function ShipmentContents({ items }: { items: ShipmentContent[] }) {
+  const line = (item: ShipmentContent, index: number) => <li key={index}>{formatShipmentContent(item)}</li>
+  return <div className="shipment-contents">
+    <ul>{items.slice(0, 3).map(line)}</ul>
+    {items.length > 3 && <details><summary>عرض {items.length - 3} بنود أخرى</summary>
+      <ul>{items.slice(3).map(line)}</ul>
+    </details>}
+  </div>
+}
+
 function ExpandedShipment({ id, onClose, children }: { id: string; onClose: () => void; children: ReactNode }) {
   const panel = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -316,7 +326,7 @@ export function Shipments() {
     </div>
     <Listing data={{ ...list, search(value) { show(); list.search(value) }, setPage(value) { show(); list.setPage(value) } }}>
       {list.result?.items.length ? <div className="table-scroll"><table>
-        <thead><tr><th scope="col">رقم التتبع</th><th scope="col">المصدر</th><th scope="col">الوجهة</th>
+        <thead><tr><th scope="col">رقم التتبع</th><th scope="col">المصدر</th><th scope="col">الوجهة</th><th scope="col">محتويات الشحنة</th>
           <th scope="col">تاريخ الإرسال</th><th scope="col">الحالة</th><th scope="col">آخر حدث</th></tr></thead>
         <tbody>{list.result.items.map((item) => <Fragment key={item.id}><tr className={selected === item.id ? "shipment-row-expanded" : undefined}>
           <th scope="row"><button id={`shipment-toggle-${item.id}`} className="secondary compact" aria-expanded={selected === item.id}
@@ -324,11 +334,11 @@ export function Shipments() {
             onClick={() => show(selected === item.id ? undefined : item.id)}>
             <span aria-hidden="true">{selected === item.id ? "▾ " : "▸ "}</span><bdi>{item.trackingNumber}</bdi>
           </button></th>
-          <td>{item.sourceName}</td><td>{item.destinationName}</td><td><bdi>{item.dispatchedOn}</bdi></td>
+          <td>{item.sourceName}</td><td>{item.destinationName}</td><td><ShipmentContents items={item.contents} /></td><td><bdi>{item.dispatchedOn}</bdi></td>
           <td><span className={`shipment-status${item.status === "delivered" ? " shipment-status-delivered" : ""}`}>{labels[item.status]}</span>{item.receivedAt !== null && <small className="table-note">الاستلام مؤكّد</small>}</td>
           <td>{item.lastEvent.description}<small className="table-note">{item.lastEvent.location}{item.lastEvent.location && " · "}
             <bdi>{dateTime.format(item.lastEvent.occurredAt)}</bdi></small></td>
-        </tr>{selected === item.id && <tr className="shipment-detail-row"><td colSpan={6}>
+        </tr>{selected === item.id && <tr className="shipment-detail-row"><td colSpan={7}>
           <ExpandedShipment id={item.id} onClose={() => show()}>
             {notice && <p role="status" className="notice">{notice}</p>}
             {error && <p role="alert" className="error">{error}</p>}

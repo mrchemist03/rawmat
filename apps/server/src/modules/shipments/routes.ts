@@ -1,4 +1,5 @@
 import {
+  formatShipmentContent,
   listQuerySchema, purchaseBranchListSchema, shipmentDetailSchema, shipmentEditSchema, shipmentIdSchema, shipmentInputSchema,
   shipmentListSchema, shipmentQuerySchema, shipmentReceiptSchema, shipmentStatusLabels, shipmentUpdateSchema,
   trackingNumberSchema,
@@ -82,9 +83,9 @@ export function registerShipments(app: FastifyInstance, auth: AuthAccess, option
     if (!query.success) return invalid(reply)
     if (!allowExport(auth, actor.id, request, reply)) return
     const { items } = repository.list({ ...query.data, page: 1 }, exportRowLimit + 1)
-    return sendCsv(reply, "shipments.csv", ["رقم التتبع", "شعبة المصدر", "شعبة الوجهة", "تاريخ الإرسال", "الحالة",
+    return sendCsv(reply, "shipments.csv", ["رقم التتبع", "شعبة المصدر", "شعبة الوجهة", "محتويات الشحنة", "تاريخ الإرسال", "الحالة",
       "آخر حدث", "الموقع", "وقت الحدث (UTC)", "وقت تأكيد الاستلام (UTC)"],
-      items.map((item) => [item.trackingNumber, item.sourceName, item.destinationName, item.dispatchedOn,
+      items.map((item) => [item.trackingNumber, item.sourceName, item.destinationName, item.contents.map(formatShipmentContent).join("\n"), item.dispatchedOn,
         shipmentStatusLabels[item.status], item.lastEvent.description, item.lastEvent.location,
         new Date(item.lastEvent.occurredAt).toISOString(), item.receivedAt === null ? null : new Date(item.receivedAt).toISOString()]))
   })

@@ -47,11 +47,18 @@ export const shipmentQuerySchema = listQuerySchema.extend({
 const eventSchema = z.strictObject({
   id: z.uuid(), status: shipmentStatus, location: z.string(), description: z.string(), occurredAt: z.number().int(),
 })
+const contentSchema = z.strictObject({ name: z.string(), quantity: receiptQuantity, unitName: z.string().nullable() })
+export type ShipmentContent = z.infer<typeof contentSchema>
+
+export function formatShipmentContent(item: ShipmentContent) {
+  return item.name + " × " + item.quantity + (item.unitName ? " " + item.unitName : "")
+}
+
 const summary = z.strictObject({
   id: z.uuid(), trackingNumber: trackingNumberSchema, sourceName: z.string(), destinationName: z.string(),
   dispatchedOn: z.iso.date(), status: shipmentStatus, lastEvent: eventSchema, receivedAt: z.number().int().nullable(),
 })
-export const shipmentListSchema = z.strictObject({ items: z.array(summary), total: z.number().int() })
+export const shipmentListSchema = z.strictObject({ items: z.array(summary.extend({ contents: z.array(contentSchema).max(100) })), total: z.number().int() })
 export const shipmentDetailSchema = summary.extend({
   revision, events: z.array(eventSchema),
   edit: z.strictObject({

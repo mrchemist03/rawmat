@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { pageSize, translateTrackingDescription } from "@rawmat/shared"
-import type { ShipmentEdit, ShipmentInput, ShipmentQuery, ShipmentReceipt, ShipmentUpdate } from "@rawmat/shared"
+import type { ShipmentContent, ShipmentEdit, ShipmentInput, ShipmentQuery, ShipmentReceipt, ShipmentUpdate } from "@rawmat/shared"
 import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
 import type { AppDatabase } from "../../db/database.js"
@@ -70,6 +70,25 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         and first.code = 'manual:registered' order by first.revision desc limit 1))`))
   }
 
+  function contentsFor(ids: string[]) {
+    const result = new Map<string, ShipmentContent[]>()
+    // Batch both list pages and larger exports without one query per shipment or excessive SQL parameters.
+    for (let start = 0; start < ids.length; start += 500) {
+      const rows = db.select({ shipmentId: shipmentItems.shipmentId,
+        name: sql<string>`coalesce(${materials.name}, ${shipmentItems.description})`,
+        quantity: shipmentItems.quantity, unitName: units.name })
+        .from(shipmentItems).leftJoin(materials, eq(shipmentItems.materialId, materials.id))
+        .leftJoin(units, eq(materials.unitId, units.id)).where(inArray(shipmentItems.shipmentId, ids.slice(start, start + 500)))
+        .orderBy(asc(shipmentItems.shipmentId), asc(shipmentItems.position)).all()
+      for (const { shipmentId, ...content } of rows) {
+        const contents = result.get(shipmentId) ?? []
+        contents.push(content)
+        result.set(shipmentId, contents)
+      }
+    }
+    return result
+  }
+
   return {
     findByTrackingNumber(trackingNumber: string) {
       return db.select({ id: shipments.id }).from(shipments).where(eq(shipments.trackingNumber, trackingNumber)).get()
@@ -85,7 +104,8 @@ export function createShipmentRepository(db: AppDatabase, now: () => number, aut
         .limit(limit).offset((page - 1) * pageSize).all()
       const total = db.select({ total: count() }).from(shipments).innerJoin(source, eq(source.id, shipments.sourceId))
         .innerJoin(destination, eq(destination.id, shipments.destinationId)).where(filter).get()?.total ?? 0
-      return { items: items.map((item) => ({ ...item, lastEvent: translatedEvent(item.lastEvent) })), total }
+      const contents = contentsFor(items.map(({ id }) => id))
+      return { items: items.map((item) => ({ ...item, contents: contents.get(item.id) ?? [], lastEvent: translatedEvent(item.lastEvent) })), total }
     },
 
     detail(actor: Actor, id: string) {
