@@ -15,7 +15,7 @@ FROM build AS production-dependencies
 RUN npm ci --omit=dev --workspace @rawmat/server --workspace @rawmat/shared --ignore-scripts --no-audit --no-fund \
     && mkdir /data
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:39b0407357c9fadf1a9708d22088f02de21f0e1e8a688474eea2d8701e7d5693 AS node-runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:675c532423b908f9e56f9d60a4e62309b63cd2a3175acb90a46b96f7ee68e121 AS node-runtime
 
 FROM gcr.io/distroless/base-nossl-debian13:nonroot@sha256:4006ac92504be607b70de01d1f64f38288c69fcd8faa820f6d3aed266ea32ac5
 # Official Node bundles TLS and compression; copy only its loaded C++ runtime dependencies.
