@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "11.1.5",
-    "@fastify/static": "10.1.11",
+    "@fastify/static": "10.1.12",
     "@rawmat/shared": "0.1.0",
     "csv-parse": "7.0.3",
     "decimal.js": "10.6.0",
